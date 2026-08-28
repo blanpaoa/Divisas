@@ -1,10 +1,5 @@
 node_modules/
 backend/data/
-.env
-.env.local
-.env.*.local
 backend/.env
-frontend/.env
 *.log
 .DS_Store
-
