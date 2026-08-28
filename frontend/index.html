@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Casa de Cambio - Gestion</title>
+<link rel="stylesheet" href="/css/styles.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body>
+
+<!-- ===================== LOGIN ===================== -->
+<div id="vista-login" class="login-wrap">
+  <div class="login-card">
+    <h1>Casa de Cambio</h1>
+    <p class="subt">Ingresa con tu email para continuar</p>
+    <form id="form-login">
+      <label for="login-usuario">Email</label>
+      <input id="login-usuario" type="email" autocomplete="username" required />
+      <label for="login-clave">Clave</label>
+      <input id="login-clave" type="password" autocomplete="current-password" required />
+      <div class="error-msg" id="login-error"></div>
+      <button type="submit" class="btn-primary">Ingresar</button>
+    </form>
+  </div>
+</div>
+
+<!-- ===================== APP ===================== -->
+<div id="vista-app" class="app-shell oculto">
+  <aside class="sidebar">
+    <h2>💱 Casa de Cambio</h2>
+    <div class="user-box">
+      <strong id="sb-nombre-usuario">-</strong>
+      <span id="sb-rol-usuario">-</span>
+    </div>
+    <nav id="nav-menu">
+      <button class="nav-item" data-vista="dashboard">📊 Dashboard</button>
+      <button class="nav-item" data-vista="tenencias">💰 Tenencias diarias</button>
+      <button class="nav-item" data-vista="operaciones">🔄 Compra / Venta</button>
+      <button class="nav-item" data-vista="entradas">⬇️ Entradas y prestamos</button>
+      <button class="nav-item" data-vista="salidas">⬆️ Salidas / prestamos</button>
+      <button class="nav-item" data-vista="gastos">🧾 Gastos</button>
+      <button class="nav-item" data-vista="transferencias">🌎 Transferencias</button>
+      <button class="nav-item" data-vista="resumen-diario">📅 Resumen diario</button>
+      <button class="nav-item" data-vista="utilidad-mensual">📈 Utilidad mensual</button>
+      <button class="nav-item" data-vista="monedas">🪙 Monedas</button>
+      <button class="nav-item oculto" data-vista="usuarios" id="nav-usuarios">👤 Usuarios</button>
+    </nav>
+    <button class="logout-btn" id="btn-logout">Cerrar sesion</button>
+  </aside>
+
+  <main class="main">
+    <div id="contenido"></div>
+  </main>
+</div>
+
+<div id="toast" class="toast oculto"></div>
+
+<script src="/js/config.js"></script>
+<script src="/js/supabaseClient.js"></script>
+<script src="/js/api.js"></script>
+<script src="/js/ui.js"></script>
+<script src="/js/vistas.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
