@@ -1,0 +1,9 @@
+{
+  "name": "casa-cambio-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Frontend estatico (HTML/CSS/JS) de Casa de Cambio. El build solo genera js/config.js a partir de variables de entorno; no hay bundler ni framework.",
+  "scripts": {
+    "build": "node scripts/generate-config.js"
+  }
+}

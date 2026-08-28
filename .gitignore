@@ -1,5 +1,7 @@
 node_modules/
 backend/data/
 backend/.env
+frontend/.env
+frontend/js/config.js
 *.log
 .DS_Store
