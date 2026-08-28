@@ -42,6 +42,12 @@ casa-cambio-app/
 4. Abrí el archivo `supabase/schema.sql` de este proyecto, copiá **todo** el contenido, pegalo
    en el editor y tocá **Run**. Esto crea todas las tablas, el catálogo de monedas y las
    políticas de seguridad (RLS) que controlan qué puede hacer cada rol.
+5. Corré tambien, en orden, estas dos migraciones (mismo lugar: SQL Editor → New query → pegar
+   → Run):
+   - `supabase/migrations/002_tasas_diarias.sql` — tabla de tasa del día por moneda.
+   - `supabase/migrations/003_motor_costeo.sql` — el motor de costeo promedio ponderado que
+     calcula solo la utilidad y el acumulado (ver más abajo, sección "Cómo funciona el cierre
+     de caja").
 
 ### Crear tu primer usuario admin
 
@@ -107,6 +113,63 @@ funcione.
 ### Actualizaciones futuras
 
 Cada vez que hagas `git push` a la rama conectada, Vercel vuelve a desplegar automáticamente.
+
+---
+
+## Cómo funciona el cierre de caja (motor de costeo)
+
+Esto reemplaza los cálculos que antes hacían las fórmulas de Google Sheets. Se reconstruyó
+analizando 173 días reales de la planilla original hasta encontrar las fórmulas exactas que
+usaban — están confirmadas contra esos datos, no son una aproximación.
+
+**Costeo promedio ponderado (WAC).** Las tenencias de cada moneda no se valúan "al precio de
+hoy" — se valúan al **costo promedio de compra**. Cada vez que se carga una compra en
+*Compra / Venta*, se recalcula el costo promedio de esa moneda:
+
+```
+costo_promedio_nuevo = (cantidad_anterior × costo_anterior + cantidad_comprada × precio_compra)
+                        / (cantidad_anterior + cantidad_comprada)
+```
+
+Y cada vez que se carga una venta, se calcula la **utilidad realizada** de esa operación:
+
+```
+utilidad = cantidad_vendida × (precio_venta − costo_promedio_vigente)
+```
+
+Por eso **"Posición actual" ya no se carga a mano**: se calcula sola sumando la *Apertura de
+saldos* con todo el historial de *Compra / Venta*.
+
+**El "Cierre diario" es un acumulado, no un número que arranca de cero cada día:**
+
+```
+TOTAL(hoy) = TOTAL(ayer) + utilidad_del_día − gastos_del_día [+ ajustes manuales opcionales]
+```
+
+Si necesitás resetear el acumulado (por ejemplo, en un corte de mes — en la planilla original
+lo hacían de vez en cuando), tildá "Resetear acumulado" ese día.
+
+**Chequeo automático.** La pantalla de Cierre diario muestra también `EXISTENCIA` (lo que se
+tiene: tenencias + salidas/préstamos del día) contra `DEBEMOS` (lo que se debe: entradas +
+utilidad del día + faltante/sobrante). Si no coinciden, avisa — es la misma auditoría cruzada
+que tenía la planilla original.
+
+### ⚠️ Paso obligatorio antes de cargar el primer día: Apertura de saldos
+
+El motor necesita un punto de partida. Andá a **Apertura de saldos** (solo lo ve el admin) y
+cargá, para cada moneda, cuánto tenían y a qué costo promedio **el día antes de empezar a usar
+la app**. Sin esto, la utilidad del primer día va a salir mal (parte de cero en vez de partir
+de lo que ya tenían).
+
+### Qué quedó fuera del modelo (a propósito, por ahora)
+
+La planilla original también lleva una cuenta corriente histórica con servicios de remesas
+(Latin Express / MoneyGram, con saldos acumulados de cientos de millones — otro orden de
+magnitud que la caja diaria), un conteo físico de billetes (arqueos) independiente del
+"faltante y sobrante" del cierre diario, y un par de logs de transferencias a Colombia y
+depósitos bancarios. Se agregó un lugar simple para cargar Latin/MoneyGram si hace falta
+(**Cierre diario → "Otros saldos"**), pero el resto no se modeló todavía — si se usan
+activamente, se pueden sumar como módulos aparte.
 
 ---
 

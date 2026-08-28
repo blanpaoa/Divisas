@@ -2,6 +2,7 @@ const RUTAS = {
   dashboard: vistaDashboard,
   tenencias: vistaTenencias,
   operaciones: vistaOperaciones,
+  tasas: vistaTasas,
   entradas: vistaEntradas,
   salidas: vistaSalidas,
   gastos: vistaGastos,
@@ -9,6 +10,7 @@ const RUTAS = {
   'resumen-diario': vistaResumenDiario,
   'utilidad-mensual': vistaUtilidadMensual,
   monedas: vistaMonedas,
+  apertura: vistaApertura,
   usuarios: vistaUsuarios,
 };
 
@@ -20,6 +22,7 @@ function mostrarApp(perfil) {
 
   if (perfil.rol === 'admin') {
     document.getElementById('nav-usuarios').classList.remove('oculto');
+    document.getElementById('nav-apertura').classList.remove('oculto');
   }
 
   navegarA('dashboard');

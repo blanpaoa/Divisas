@@ -36,15 +36,17 @@
     </div>
     <nav id="nav-menu">
       <button class="nav-item" data-vista="dashboard">📊 Dashboard</button>
-      <button class="nav-item" data-vista="tenencias">💰 Tenencias diarias</button>
+      <button class="nav-item" data-vista="tenencias">💰 Posicion actual</button>
       <button class="nav-item" data-vista="operaciones">🔄 Compra / Venta</button>
+      <button class="nav-item" data-vista="tasas">💱 Tasa del dia</button>
       <button class="nav-item" data-vista="entradas">⬇️ Entradas y prestamos</button>
       <button class="nav-item" data-vista="salidas">⬆️ Salidas / prestamos</button>
       <button class="nav-item" data-vista="gastos">🧾 Gastos</button>
       <button class="nav-item" data-vista="transferencias">🌎 Transferencias</button>
-      <button class="nav-item" data-vista="resumen-diario">📅 Resumen diario</button>
+      <button class="nav-item" data-vista="resumen-diario">📅 Cierre diario</button>
       <button class="nav-item" data-vista="utilidad-mensual">📈 Utilidad mensual</button>
       <button class="nav-item" data-vista="monedas">🪙 Monedas</button>
+      <button class="nav-item oculto" data-vista="apertura" id="nav-apertura">🏁 Apertura de saldos</button>
       <button class="nav-item oculto" data-vista="usuarios" id="nav-usuarios">👤 Usuarios</button>
     </nav>
     <button class="logout-btn" id="btn-logout">Cerrar sesion</button>
@@ -59,6 +61,7 @@
 
 <script src="/js/config.js"></script>
 <script src="/js/supabaseClient.js"></script>
+<script src="/js/motor.js"></script>
 <script src="/js/api.js"></script>
 <script src="/js/ui.js"></script>
 <script src="/js/vistas.js"></script>

@@ -10,6 +10,9 @@ const TABLA_POR_RECURSO = {
   'utilidad-mensual': 'utilidad_mensual',
   monedas: 'monedas',
   usuarios: 'perfiles',
+  tasas: 'tasas_diarias',
+  apertura: 'apertura_saldos',
+  'otros-saldos': 'otros_saldos_diarios',
 };
 
 function aplanarModenaJoin(fila) {
@@ -71,7 +74,9 @@ const Api = {
     // Rutas especiales
     if (path.startsWith('/dashboard/')) return this._dashboard(path, params);
     if (path.startsWith('/resumen-diario/')) return this._resumenDeFecha(path.split('/')[2]);
+    if (path.startsWith('/otros-saldos/')) return this._otrosSaldosDeFecha(path.split('/')[2]);
     if (path.startsWith('/utilidad-mensual')) return this._listarUtilidadMensual(params);
+    if (path === '/motor/posiciones') return this._motorPosiciones(params);
 
     const partes = path.split('/').filter(Boolean); // ej: ["tenencias"]
     const recurso = partes[0];
@@ -112,6 +117,16 @@ const Api = {
   async _resumenDeFecha(fecha) {
     const { data, error } = await supabaseClient
       .from('resumen_diario')
+      .select('*')
+      .eq('fecha', fecha)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async _otrosSaldosDeFecha(fecha) {
+    const { data, error } = await supabaseClient
+      .from('otros_saldos_diarios')
       .select('*')
       .eq('fecha', fecha)
       .maybeSingle();
@@ -161,6 +176,29 @@ const Api = {
       return { ok: true };
     }
 
+    if (path.startsWith('/otros-saldos/')) {
+      const fecha = path.split('/')[2];
+      const usuario = this.getUsuario();
+      const { error } = await supabaseClient
+        .from('otros_saldos_diarios')
+        .upsert({ fecha, ...body, usuario_id: usuario ? usuario.id : null }, { onConflict: 'fecha' });
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
+    if (path.startsWith('/apertura/')) {
+      const monedaId = path.split('/')[2];
+      const usuario = this.getUsuario();
+      const { error } = await supabaseClient
+        .from('apertura_saldos')
+        .upsert(
+          { moneda_id: Number(monedaId), ...body, usuario_id: usuario ? usuario.id : null },
+          { onConflict: 'moneda_id' }
+        );
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
     if (path.startsWith('/utilidad-mensual/')) {
       const [, , anio, mes] = path.split('/');
       const { error } = await supabaseClient
@@ -195,6 +233,47 @@ const Api = {
     const { error } = await supabaseClient.from(tabla).delete().eq('id', id);
     if (error) throw new Error(error.message);
     return { ok: true };
+  },
+
+  // Busca la tasa cargada para esa fecha exacta y moneda; si no existe, usa
+  // la mas reciente anterior a esa fecha. Devuelve null si no hay ninguna.
+  async buscarTasaMasReciente(fecha, monedaId) {
+    const { data, error } = await supabaseClient
+      .from('tasas_diarias')
+      .select('cotizacion')
+      .eq('moneda_id', monedaId)
+      .lte('fecha', fecha)
+      .order('fecha', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? data.cotizacion : null;
+  },
+
+  /* ===================== MOTOR DE COSTEO (WAC) ===================== */
+  async _motorPosiciones({ hasta } = {}) {
+    const [aperturaRes, operacionesRes] = await Promise.all([
+      supabaseClient.from('apertura_saldos').select('moneda_id, cantidad, costo_promedio'),
+      supabaseClient
+        .from('operaciones_cambio')
+        .select('fecha, tipo, moneda_id, cantidad, cotizacion')
+        .order('fecha', { ascending: true }),
+    ]);
+    if (aperturaRes.error) throw new Error(aperturaRes.error.message);
+    if (operacionesRes.error) throw new Error(operacionesRes.error.message);
+
+    const resultado = window.MotorCosteo.calcularPosiciones(aperturaRes.data, operacionesRes.data);
+    const fechas = Object.keys(resultado).sort();
+    const fechasHasta = hasta ? fechas.filter((f) => f <= hasta) : fechas;
+    const ultimaFecha = fechasHasta.length ? fechasHasta[fechasHasta.length - 1] : null;
+
+    return {
+      fechaCalculada: ultimaFecha,
+      monedas: ultimaFecha ? resultado[ultimaFecha].monedas : {},
+      utilidadDelDia: ultimaFecha ? resultado[ultimaFecha].utilidad_total : 0,
+      utilidadPorMoneda: ultimaFecha ? resultado[ultimaFecha].utilidad_por_moneda : {},
+      historial: fechasHasta.map((f) => ({ fecha: f, utilidad_total: resultado[f].utilidad_total })),
+    };
   },
 
   /* ===================== DASHBOARD (agregaciones) ===================== */
