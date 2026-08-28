@@ -62,24 +62,20 @@ En **Project Settings → API** vas a encontrar:
 - **Project URL**
 - **anon public** key
 
-Estos dos valores van en `frontend/js/config.js` (ver paso 2). Es seguro que queden visibles en
-el código del frontend: la *anon key* está diseñada para usarse del lado del cliente, y el
-acceso real a los datos queda controlado por las políticas de RLS que corrió el script SQL.
+Estos dos valores se configuran mediante variables de entorno (`SUPABASE_URL` y `SUPABASE_ANON_KEY`).
 
 ---
 
 ## Paso 2 — Configurar el frontend
 
-Abrí `frontend/js/config.js` y completá:
+Crea un archivo `.env` en la carpeta `frontend/` (o configura las variables de entorno en tu servidor/hosting) tomando como base `frontend/.env.example`:
 
-```js
-window.SUPABASE_CONFIG = {
-  url: 'https://TU-PROYECTO.supabase.co',
-  anonKey: 'TU_ANON_KEY_ACA',
-};
+```env
+SUPABASE_URL=https://TU-PROYECTO.supabase.co
+SUPABASE_ANON_KEY=TU_ANON_KEY_ACA
 ```
 
-Con esos dos datos que copiaste de Supabase.
+El archivo `frontend/js/config.js` obtendrá automáticamente estos valores.
 
 ### Probarlo en tu computadora antes de desplegar (opcional)
 
@@ -104,11 +100,8 @@ Y abrís la URL que te muestre en la terminal.
    - **Framework Preset**: dejalo en "Other" / ninguno — no hace falta build.
    - **Build Command**: dejalo vacío.
    - **Output Directory**: dejalo vacío (usa la raíz de `frontend`).
+   - **Environment Variables**: agrega `SUPABASE_URL` y `SUPABASE_ANON_KEY` con los valores de tu proyecto.
 4. Deploy. En un minuto vas a tener una URL tipo `tu-proyecto.vercel.app` funcionando.
-
-Como `frontend/js/config.js` ya tiene las credenciales de Supabase adentro del código (son
-públicas por diseño), no hace falta configurar variables de entorno en Vercel para que
-funcione.
 
 ### Actualizaciones futuras
 
