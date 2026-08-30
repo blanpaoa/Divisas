@@ -16,6 +16,7 @@ const TABLA_POR_RECURSO = {
   prestamos: 'prestamos',
   'pagos-prestamos': 'prestamos_pagos',
   'comisiones-mensuales': 'comisiones_mensuales',
+  'movimientos-pesos': 'movimientos_pesos',
 };
 
 function aplanarModenaJoin(fila) {
@@ -331,24 +332,74 @@ const Api = {
 
   /* ===================== MOTOR DE COSTEO (WAC) ===================== */
   async _motorPosiciones({ hasta } = {}) {
-    const [aperturaRes, operacionesRes] = await Promise.all([
+    const [aperturaRes, operacionesRes, otrosSaldosRes, movimientosPesosRes] = await Promise.all([
       supabaseClient.from('apertura_saldos').select('moneda_id, cantidad, costo_promedio'),
       supabaseClient
         .from('operaciones_cambio')
         .select('fecha, tipo, moneda_id, cantidad, cotizacion')
         .order('fecha', { ascending: true }),
+      supabaseClient
+        .from('otros_saldos_diarios')
+        .select('fecha, otras_salidas_pesos_ars, otras_entradas_pesos_ars')
+        .order('fecha', { ascending: true }),
+      supabaseClient
+        .from('movimientos_pesos')
+        .select('fecha, tipo, monto')
+        .order('fecha', { ascending: true }),
     ]);
     if (aperturaRes.error) throw new Error(aperturaRes.error.message);
     if (operacionesRes.error) throw new Error(operacionesRes.error.message);
+    if (otrosSaldosRes.error) throw new Error(otrosSaldosRes.error.message);
+    if (movimientosPesosRes.error) throw new Error(movimientosPesosRes.error.message);
 
-    const resultado = window.MotorCosteo.calcularPosiciones(aperturaRes.data, operacionesRes.data);
+    // moneda_id viene como numero desde Supabase; el motor identifica monedas por codigo
+    // para las divisas extranjeras, y por separado calcula el pozo de pesos (ARS).
+    const codigoPorId = {};
+    Estado.monedas.forEach((m) => { codigoPorId[m.id] = m.codigo; });
+    // Aseguramos que Estado.monedas este cargado (puede no estarlo si se llama muy temprano)
+    if (Object.keys(codigoPorId).length === 0) {
+      const { data } = await supabaseClient.from('monedas').select('id, codigo');
+      (data || []).forEach((m) => { codigoPorId[m.id] = m.codigo; });
+    }
+
+    const aperturaArs = (aperturaRes.data.find((a) => codigoPorId[a.moneda_id] === 'ARS') || { cantidad: 0 }).cantidad;
+    const aperturaExtranjera = aperturaRes.data.filter((a) => codigoPorId[a.moneda_id] !== 'ARS');
+
+    const resultado = window.MotorCosteo.calcularPosiciones(aperturaExtranjera, operacionesRes.data);
     const fechas = Object.keys(resultado).sort();
     const fechasHasta = hasta ? fechas.filter((f) => f <= hasta) : fechas;
     const ultimaFecha = fechasHasta.length ? fechasHasta[fechasHasta.length - 1] : null;
 
+    // Saldo de pesos (formula validada contra la planilla real). Se combinan dos
+    // fuentes para "otras salidas/entradas": el numero cargado a mano en Otros
+    // saldos (usado para la carga historica) + la suma del log item por item de
+    // Movimientos de pesos (usado en el dia a dia, se suma solo).
+    const otrosPorFecha = {};
+    otrosSaldosRes.data.forEach((o) => {
+      otrosPorFecha[o.fecha] = otrosPorFecha[o.fecha] || { otras_salidas: 0, otras_entradas: 0 };
+      otrosPorFecha[o.fecha].otras_salidas += Number(o.otras_salidas_pesos_ars) || 0;
+      otrosPorFecha[o.fecha].otras_entradas += Number(o.otras_entradas_pesos_ars) || 0;
+    });
+    movimientosPesosRes.data.forEach((m) => {
+      otrosPorFecha[m.fecha] = otrosPorFecha[m.fecha] || { otras_salidas: 0, otras_entradas: 0 };
+      if (m.tipo === 'salida') otrosPorFecha[m.fecha].otras_salidas += Number(m.monto) || 0;
+      else otrosPorFecha[m.fecha].otras_entradas += Number(m.monto) || 0;
+    });
+    const otrosPesosPorFecha = Object.entries(otrosPorFecha).map(([fecha, d]) => ({ fecha, ...d }));
+    const saldoPesosPorFecha = window.MotorCosteo.calcularSaldoPesos(aperturaArs, operacionesRes.data, otrosPesosPorFecha);
+    const fechasPesos = Object.keys(saldoPesosPorFecha).sort().filter((f) => !hasta || f <= hasta);
+    const ultimaFechaPesos = fechasPesos.length ? fechasPesos[fechasPesos.length - 1] : null;
+    const saldoPesos = ultimaFechaPesos ? saldoPesosPorFecha[ultimaFechaPesos] : aperturaArs;
+
+    const monedasConPesos = ultimaFecha ? { ...resultado[ultimaFecha].monedas } : {};
+    const idArs = Object.entries(codigoPorId).find(([, codigo]) => codigo === 'ARS');
+    if (idArs) {
+      monedasConPesos[idArs[0]] = { cantidad: saldoPesos, costo_promedio: 1 };
+    }
+
     return {
-      fechaCalculada: ultimaFecha,
-      monedas: ultimaFecha ? resultado[ultimaFecha].monedas : {},
+      fechaCalculada: ultimaFecha || ultimaFechaPesos,
+      monedas: monedasConPesos,
       utilidadDelDia: ultimaFecha ? resultado[ultimaFecha].utilidad_total : 0,
       utilidadPorMoneda: ultimaFecha ? resultado[ultimaFecha].utilidad_por_moneda : {},
       historial: fechasHasta.map((f) => ({ fecha: f, utilidad_total: resultado[f].utilidad_total })),

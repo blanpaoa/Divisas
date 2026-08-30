@@ -7,6 +7,7 @@ const RUTAS = {
   salidas: vistaSalidas,
   gastos: vistaGastos,
   transferencias: vistaTransferencias,
+  'movimientos-pesos': vistaMovimientosPesos,
   prestamos: vistaPrestamos,
   'resumen-diario': vistaResumenDiario,
   'utilidad-mensual': vistaUtilidadMensual,

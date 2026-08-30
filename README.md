@@ -212,6 +212,23 @@ frontend, se hace en dos pasos:
 - **Comisiones Latin / Moneygram** (tabla mensual Latin + Money = Total).
 - **Transferencias** ahora también sirve para el circuito de Colombia (recibido para enviar /
   pagado) y la cuenta BBVA de Venezuela, con un resumen de saldo neto por destino y moneda.
+- **Movimientos de pesos** (nuevo): log item por item de "otras salidas/entradas" de pesos
+  (pagos a Latin/Moneygram, efectivo, cuentas BBVA, etc). Alimenta automáticamente el cálculo
+  del pozo de pesos — no hace falta cargar un número suelto por día.
+
+## El pozo de pesos (ARS) se calcula solo
+
+Fórmula confirmada directamente contra la barra de fórmulas de la planilla real, y validada
+con precisión exacta ($0,00 de diferencia) contra 6 días de datos reales:
+
+```
+saldo_pesos(hoy) = saldo_pesos(ayer) − compras_pesos(hoy) + ventas_pesos(hoy)
+                    − otras_salidas(hoy) + otras_entradas(hoy)
+```
+
+"Otras salidas/entradas" se cargan en **Movimientos de pesos** (item por item, se suman solas)
+— son todos los movimientos de caja que no son compra/venta de divisas: pagos e ingresos de
+Latin Express, Moneygram, efectivo, cuentas BBVA, etc.
 
 ## Lo que se investigó a fondo en las planillas originales, y lo que quedó pendiente
 

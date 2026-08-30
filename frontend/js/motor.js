@@ -63,10 +63,52 @@ function calcularPosiciones(aperturas, operaciones) {
   return resultado;
 }
 
+/**
+ * Calcula el saldo de PESOS (ARS) dia a dia. Formula confirmada
+ * directamente contra la celda real de la planilla (con captura de la
+ * barra de formulas) y validada con precision exacta contra 6 dias
+ * reales:
+ *
+ *   saldo(hoy) = saldo(ayer) - compras_pesos(hoy) + ventas_pesos(hoy)
+ *                - otras_salidas(hoy) + otras_entradas(hoy)
+ *
+ * "otras_salidas"/"otras_entradas" son los totales de la tabla
+ * SALIDA DE PESOS / ENTRADA DE PESOS de la planilla de operaciones
+ * (pagos/ingresos de Latin Express, Moneygram, y varios otros
+ * movimientos de caja que no son compra/venta de divisas).
+ */
+function calcularSaldoPesos(aperturaPesos, operaciones, otrosPesosPorFecha) {
+  // Agrupar compras/ventas en pesos por fecha
+  const porFecha = {};
+  operaciones.forEach((o) => {
+    porFecha[o.fecha] = porFecha[o.fecha] || { compras: 0, ventas: 0 };
+    const monto = Number(o.cantidad) * Number(o.cotizacion);
+    if (o.tipo === 'compra') porFecha[o.fecha].compras += monto;
+    else porFecha[o.fecha].ventas += monto;
+  });
+
+  // otrosPesosPorFecha: [{ fecha, otras_salidas, otras_entradas }]
+  otrosPesosPorFecha.forEach((o) => {
+    porFecha[o.fecha] = porFecha[o.fecha] || { compras: 0, ventas: 0 };
+    porFecha[o.fecha].otras_salidas = Number(o.otras_salidas) || 0;
+    porFecha[o.fecha].otras_entradas = Number(o.otras_entradas) || 0;
+  });
+
+  const fechas = Object.keys(porFecha).sort();
+  let saldo = Number(aperturaPesos) || 0;
+  const resultado = {};
+  for (const fecha of fechas) {
+    const d = porFecha[fecha];
+    saldo = saldo - (d.compras || 0) + (d.ventas || 0) - (d.otras_salidas || 0) + (d.otras_entradas || 0);
+    resultado[fecha] = saldo;
+  }
+  return resultado; // { fecha: saldo_al_cierre_de_ese_dia }
+}
+
 // Exponer tambien como objeto global para uso directo en el navegador (sin bundler)
 if (typeof window !== 'undefined') {
-  window.MotorCosteo = { calcularPosiciones };
+  window.MotorCosteo = { calcularPosiciones, calcularSaldoPesos };
 }
 if (typeof module !== 'undefined') {
-  module.exports = { calcularPosiciones };
+  module.exports = { calcularPosiciones, calcularSaldoPesos };
 }

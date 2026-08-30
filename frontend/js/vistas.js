@@ -625,6 +625,29 @@ const vistaGastos = crearVistaCrud({
   ],
 });
 
+const vistaMovimientosPesos = crearVistaCrud({
+  titulo: '💵 Movimientos de pesos (otras salidas/entradas)',
+  endpoint: '/movimientos-pesos',
+  campos: [
+    { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
+    { key: 'tipo', label: 'Tipo', type: 'select', options: [
+      { value: 'salida', label: 'Salida' },
+      { value: 'entrada', label: 'Entrada' },
+    ] },
+    { key: 'concepto', label: 'Concepto / observacion', type: 'text', default: () => '', sugerencias: [
+      'Pagos a Latin Express-Moneygram', 'Efectivo', 'Ingresos a cuentas Lili',
+      'Abono cuentas BBVA Lili', 'Descuadres/pendientes',
+    ] },
+    { key: 'monto', label: 'Monto (ARS)', type: 'number', default: () => 0 },
+  ],
+  columnas: [
+    { key: 'fecha', label: 'Fecha' },
+    { key: 'tipo', label: 'Tipo', html: true, render: (f) => `<span class="badge ${f.tipo === 'entrada' ? 'compra' : 'venta'}">${f.tipo.toUpperCase()}</span>` },
+    { key: 'concepto', label: 'Concepto' },
+    { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
+  ],
+});
+
 async function vistaTransferencias(contenedor) {
   await Estado.cargarMonedas();
   contenedor.innerHTML = `
@@ -847,11 +870,15 @@ async function vistaResumenDiario(contenedor) {
     </div>
 
     <div class="panel" style="margin-bottom:20px;">
-      <h3>Otros saldos (Latin Express / MoneyGram / Venezuela) — opcional</h3>
+      <h3>Otros saldos y ajustes</h3>
       <p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">
-        Sub-cuentas aparte de conciliacion. Si no las usan, dejenlas en 0.
+        Las "otras salidas/entradas de pesos" del día a día se cargan solas desde
+        <strong>Movimientos de pesos</strong> (no hace falta tocar nada acá para eso). Los campos
+        de abajo son opcionales: un ajuste manual extra si hiciera falta, más Latin/Moneygram/Venezuela.
       </p>
       <div class="form-grid">
+        <div><label>Ajuste manual — otras salidas de pesos (ARS)</label><input type="number" step="any" id="rd-otras-salidas" value="0" /></div>
+        <div><label>Ajuste manual — otras entradas de pesos (ARS)</label><input type="number" step="any" id="rd-otras-entradas" value="0" /></div>
         <div><label>Latin Express — les debemos (ARS)</label><input type="number" step="any" id="rd-latin" value="0" /></div>
         <div><label>MoneyGram — nos deben (ARS)</label><input type="number" step="any" id="rd-moneygram" value="0" /></div>
         <div><label>Debo a Venezuela (ARS)</label><input type="number" step="any" id="rd-venezuela" value="0" /></div>
@@ -970,6 +997,8 @@ async function calcularCierreDelDia() {
     document.getElementById('rd-latin').value = otros.latin_debemos_ars || 0;
     document.getElementById('rd-moneygram').value = otros.moneygram_nos_debe_ars || 0;
     document.getElementById('rd-venezuela').value = otros.debo_venezuela_ars || 0;
+    document.getElementById('rd-otras-salidas').value = otros.otras_salidas_pesos_ars || 0;
+    document.getElementById('rd-otras-entradas').value = otros.otras_entradas_pesos_ars || 0;
   } catch (err) {
     cardsWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
   }
@@ -1028,6 +1057,8 @@ async function guardarOtrosSaldos() {
       latin_debemos_ars: Number(document.getElementById('rd-latin').value) || 0,
       moneygram_nos_debe_ars: Number(document.getElementById('rd-moneygram').value) || 0,
       debo_venezuela_ars: Number(document.getElementById('rd-venezuela').value) || 0,
+      otras_salidas_pesos_ars: Number(document.getElementById('rd-otras-salidas').value) || 0,
+      otras_entradas_pesos_ars: Number(document.getElementById('rd-otras-entradas').value) || 0,
     });
     UI.toast('Otros saldos guardados.');
     await calcularCierreDelDia();
