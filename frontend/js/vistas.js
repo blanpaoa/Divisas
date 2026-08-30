@@ -1857,7 +1857,7 @@ async function cargarCierreCompleto() {
   cont.innerHTML = '<div class="empty-state">Cargando...</div>';
 
   try {
-    const [motor, entradas, salidas, gastos, movPesos, resumen, otros, operaciones, ajustes] = await Promise.all([
+    const [motor, entradas, salidas, gastos, movPesos, resumen, otros, operaciones, ajustes, historialAnterior] = await Promise.all([
       Api.get('/motor/posiciones', { hasta: fecha }),
       Api.get('/entradas', { desde: fecha, hasta: fecha }),
       Api.get('/salidas', { desde: fecha, hasta: fecha }),
@@ -1867,6 +1867,7 @@ async function cargarCierreCompleto() {
       Api.get(`/otros-saldos/${fecha}`),
       Api.get('/operaciones', { desde: fecha, hasta: fecha }),
       Api.get('/ajustes-libres', { desde: fecha, hasta: fecha }),
+      Api.get('/resumen-diario', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
     ]);
 
     cont.innerHTML = '';
@@ -1947,8 +1948,18 @@ async function cargarCierreCompleto() {
     const entradasTotal = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
     const existenciaTenencias = filasTenencias.reduce((s, f) => s + f.total_ars, 0);
     const existencia = existenciaTenencias + salidaTotal + Number(o.moneygram_nos_debe_ars || 0) + ajustesExistencia;
-    const faltanteSobrante = resumen ? Number(resumen.faltante_sobrante_ars || 0) : 0;
-    const utilidadCadivi = resumen ? Number(resumen.utilidad_cadivi_ars || 0) : 0;
+    const faltanteSobrante = resumen
+      ? Number(resumen.faltante_sobrante_ars || 0)
+      : (() => {
+          const anteriorF = historialAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
+          return (anteriorF ? Number(anteriorF.faltante_sobrante_ars || 0) : 0);
+        })();
+    const utilidadCadivi = resumen
+      ? Number(resumen.utilidad_cadivi_ars || 0)
+      : (() => {
+          const anteriorC = historialAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
+          return (anteriorC ? Number(anteriorC.utilidad_cadivi_ars || 0) : 0);
+        })();
     const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(o.latin_debemos_ars || 0) + ajustesDebemos;
     const diferencia = existencia - debemos;
     const ok = Math.abs(diferencia) < 1;
