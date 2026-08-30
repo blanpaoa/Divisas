@@ -662,6 +662,68 @@ const vistaMovimientosPesos = crearVistaCrud({
   ],
 });
 
+const vistaDepositosBancarios = crearVistaCrud({
+  titulo: '🏦 Depósitos bancarios',
+  endpoint: '/depositos-bancarios',
+  campos: [
+    { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
+    { key: 'monto', label: 'Monto (ARS)', type: 'number', default: () => 0 },
+    { key: 'notas', label: 'Notas', type: 'text', default: () => '' },
+  ],
+  columnas: [
+    { key: 'fecha', label: 'Fecha' },
+    { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
+    { key: 'notas', label: 'Notas' },
+  ],
+});
+
+const vistaCierresVenezuela = crearVistaCrud({
+  titulo: '🇻🇪 Cierres de Venezuela (USD)',
+  endpoint: '/cierres-venezuela',
+  campos: [
+    { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
+    { key: 'tipo', label: 'Tipo', type: 'select', options: [
+      { value: 'salida', label: 'Salida' },
+      { value: 'entrada', label: 'Entrada' },
+    ] },
+    { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
+    { key: 'cantidad', label: 'Cantidad', type: 'number', default: () => 0 },
+    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '' },
+  ],
+  columnas: [
+    { key: 'fecha', label: 'Fecha' },
+    { key: 'tipo', label: 'Tipo', html: true, render: (f) => `<span class="badge ${f.tipo === 'entrada' ? 'compra' : 'venta'}">${f.tipo.toUpperCase()}</span>` },
+    { key: 'moneda_codigo', label: 'Moneda' },
+    { key: 'cantidad', label: 'Cantidad', render: (f) => UI.formatoNumero(f.cantidad) },
+    { key: 'concepto', label: 'Concepto' },
+  ],
+});
+
+const vistaAjustesLibres = crearVistaCrud({
+  titulo: '🧩 Ajustes libres',
+  endpoint: '/ajustes-libres',
+  campos: [
+    { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
+    { key: 'categoria', label: 'Categoría', type: 'text', default: () => '', sugerencias: [
+      'UT', 'LUJ', 'VE', 'Latin/Moneygram detalle', 'Pago obligaciones', 'Otro',
+    ] },
+    { key: 'concepto', label: 'Concepto / observación', type: 'text', default: () => '' },
+    { key: 'monto', label: 'Monto (ARS)', type: 'number', default: () => 0 },
+    { key: 'afecta', label: 'Afecta a', type: 'select', options: [
+      { value: 'ninguno', label: 'Solo informativo (no afecta cálculos)' },
+      { value: 'existencia', label: 'Suma a Existencia' },
+      { value: 'debemos', label: 'Suma a Debemos' },
+    ] },
+  ],
+  columnas: [
+    { key: 'fecha', label: 'Fecha' },
+    { key: 'categoria', label: 'Categoría' },
+    { key: 'concepto', label: 'Concepto' },
+    { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
+    { key: 'afecta', label: 'Afecta a' },
+  ],
+});
+
 async function vistaTransferencias(contenedor) {
   await Estado.cargarMonedas();
   contenedor.innerHTML = `
@@ -866,8 +928,21 @@ async function vistaResumenDiario(contenedor) {
           <input type="number" step="any" id="rd-utilidad" value="0" />
         </div>
         <div><label>Gastos del dia (ARS) — calculado, editable si hace falta</label><input type="number" step="any" id="rd-gastos-dia" value="0" /></div>
-        <div><label>Faltante / sobrante (ARS)</label><input type="number" step="any" id="rd-faltante" value="0" /></div>
-        <div><label>Utilidad Cadivi (ARS)</label><input type="number" step="any" id="rd-cadivi" value="0" /></div>
+        <div><label>Faltante / sobrante del día (ARS)</label><input type="number" step="any" id="rd-faltante-dia" value="0" /></div>
+        <div><label>Descuento faltante (ARS)</label><input type="number" step="any" id="rd-faltante-descuento" value="0" /></div>
+        <div>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
+            <input type="checkbox" id="rd-reset-faltante" style="width:auto; margin:0;" /> Resetear faltante acumulado
+          </label>
+        </div>
+        <div><label>Utilidad Cadivi del día (ARS)</label><input type="number" step="any" id="rd-cadivi-dia" value="0" /></div>
+        <div><label>Descuentos Cadivi (ARS)</label><input type="number" step="any" id="rd-cadivi-descuentos" value="0" /></div>
+        <div><label>Utilidad adicional Cadivi (ARS)</label><input type="number" step="any" id="rd-cadivi-adicional" value="0" /></div>
+        <div>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
+            <input type="checkbox" id="rd-reset-cadivi" style="width:auto; margin:0;" /> Resetear Cadivi acumulado
+          </label>
+        </div>
         <div><label>Tasa US cierre (referencia)</label><input type="number" step="any" id="rd-tasa" value="0" /></div>
         <div>
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
@@ -932,7 +1007,7 @@ async function calcularCierreDelDia() {
   chequeoWrap.innerHTML = '';
 
   try {
-    const [motor, entradasHoy, salidasHoy, gastosHoy, resumenGuardado, otrosGuardados, historialAnterior] =
+    const [motor, entradasHoy, salidasHoy, gastosHoy, resumenGuardado, otrosGuardados, historialAnterior, ajustesHoy] =
       await Promise.all([
         Api.get('/motor/posiciones', { hasta: fecha }),
         Api.get('/entradas', { desde: fecha, hasta: fecha }),
@@ -941,7 +1016,11 @@ async function calcularCierreDelDia() {
         Api.get(`/resumen-diario/${fecha}`),
         Api.get(`/otros-saldos/${fecha}`),
         Api.get('/resumen-diario', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
+        Api.get('/ajustes-libres', { desde: fecha, hasta: fecha }),
       ]);
+
+    const ajustesExistencia = ajustesHoy.filter((a) => a.afecta === 'existencia').reduce((s, a) => s + Number(a.monto || 0), 0);
+    const ajustesDebemos = ajustesHoy.filter((a) => a.afecta === 'debemos').reduce((s, a) => s + Number(a.monto || 0), 0);
 
     const utilidadDia = motor.fechaCalculada === fecha ? motor.utilidadDelDia : 0;
     const existenciaTenencias = Object.values(motor.monedas).reduce(
@@ -953,28 +1032,40 @@ async function calcularCierreDelDia() {
     const gastosDia = resumenGuardado ? Number(resumenGuardado.gastos_dia_ars || 0) : gastosTotalCalculado;
 
     const otros = otrosGuardados || { latin_debemos_ars: 0, moneygram_nos_debe_ars: 0, debo_venezuela_ars: 0 };
-    const existencia = existenciaTenencias + salidaTotal + Number(otros.moneygram_nos_debe_ars || 0);
+    const existencia = existenciaTenencias + salidaTotal + Number(otros.moneygram_nos_debe_ars || 0) + ajustesExistencia;
 
     // anterior = ultimo registro guardado antes de esta fecha
     const anterior = historialAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
     const resetUtilidad = resumenGuardado ? !!resumenGuardado.resetear_utilidad_acumulada : false;
     const resetGastos = resumenGuardado ? !!resumenGuardado.resetear_gastos_acumulado : false;
+    const resetCadivi = resumenGuardado ? !!resumenGuardado.resetear_cadivi : false;
+    const resetFaltante = resumenGuardado ? !!resumenGuardado.resetear_faltante : false;
     const utilidadAcumAnterior = (anterior && !resetUtilidad) ? Number(anterior.utilidad_acumulada_ars || 0) : 0;
     const gastosAcumAnterior = (anterior && !resetGastos) ? Number(anterior.gastos_acumulado_ars || 0) : 0;
+    const cadiviAcumAnterior = (anterior && !resetCadivi) ? Number(anterior.utilidad_cadivi_ars || 0) : 0;
+    const faltanteAcumAnterior = (anterior && !resetFaltante) ? Number(anterior.faltante_sobrante_ars || 0) : 0;
 
     const utilidadParaAcum = resumenGuardado ? Number(resumenGuardado.utilidad_diaria_ars || 0) : utilidadDia;
     const utilidadAcumulada = utilidadParaAcum + utilidadAcumAnterior;
     const gastosAcumulado = gastosDia + gastosAcumAnterior;
     const totalCierre = utilidadAcumulada - gastosAcumulado;
 
-    const faltanteSobrante = resumenGuardado ? Number(resumenGuardado.faltante_sobrante_ars || 0) : 0;
-    const utilidadCadivi = resumenGuardado ? Number(resumenGuardado.utilidad_cadivi_ars || 0) : 0;
-    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(otros.latin_debemos_ars || 0);
+    const cadiviDia = resumenGuardado ? Number(resumenGuardado.cadivi_dia_ars || 0) : 0;
+    const cadiviDescuentos = resumenGuardado ? Number(resumenGuardado.cadivi_descuentos_ars || 0) : 0;
+    const cadiviAdicional = resumenGuardado ? Number(resumenGuardado.cadivi_adicional_ars || 0) : 0;
+    const utilidadCadivi = cadiviAcumAnterior + cadiviDia - cadiviDescuentos + cadiviAdicional;
+
+    const faltanteDia = resumenGuardado ? Number(resumenGuardado.faltante_dia_ars || 0) : 0;
+    const faltanteDescuento = resumenGuardado ? Number(resumenGuardado.faltante_descuento_ars || 0) : 0;
+    const faltanteSobrante = faltanteAcumAnterior + faltanteDia - faltanteDescuento;
+
+    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(otros.latin_debemos_ars || 0) + ajustesDebemos;
     const diferenciaChequeo = existencia - debemos;
 
     _ultimoCalculoCierre = {
       fecha, utilidadDia, gastosTotalCalculado, gastosDia,
       utilidadAcumAnterior, gastosAcumAnterior, utilidadAcumulada, gastosAcumulado, totalCierre,
+      cadiviAcumAnterior, faltanteAcumAnterior,
       existencia, debemos, diferenciaChequeo,
     };
 
@@ -985,6 +1076,8 @@ async function calcularCierreDelDia() {
       { label: 'Utilidad acumulada', valor: utilidadAcumulada, clase: 'positivo' },
       { label: 'Gastos acumulado', valor: gastosAcumulado, clase: 'negativo' },
       { label: 'TOTAL (Utilidad acum. − Gastos acum.)', valor: totalCierre, clase: totalCierre >= 0 ? 'positivo' : 'negativo' },
+      { label: 'Utilidad Cadivi acumulada', valor: utilidadCadivi, clase: '' },
+      { label: 'Faltante/Sobrante acumulado', valor: faltanteSobrante, clase: '' },
       { label: 'Existencia (lo que tenemos)', valor: existencia, clase: '' },
       { label: 'Debemos (lo que se debe)', valor: debemos, clase: '' },
     ].forEach((it) => {
@@ -1005,12 +1098,17 @@ async function calcularCierreDelDia() {
     // precargar formulario
     document.getElementById('rd-utilidad').value = resumenGuardado ? resumenGuardado.utilidad_diaria_ars : utilidadDia;
     document.getElementById('rd-gastos-dia').value = resumenGuardado ? resumenGuardado.gastos_dia_ars : gastosTotalCalculado;
-    document.getElementById('rd-faltante').value = resumenGuardado ? resumenGuardado.faltante_sobrante_ars : 0;
-    document.getElementById('rd-cadivi').value = resumenGuardado ? resumenGuardado.utilidad_cadivi_ars : 0;
+    document.getElementById('rd-faltante-dia').value = faltanteDia;
+    document.getElementById('rd-faltante-descuento').value = faltanteDescuento;
+    document.getElementById('rd-cadivi-dia').value = cadiviDia;
+    document.getElementById('rd-cadivi-descuentos').value = cadiviDescuentos;
+    document.getElementById('rd-cadivi-adicional').value = cadiviAdicional;
     document.getElementById('rd-tasa').value = resumenGuardado ? resumenGuardado.tasa_us_cierre : 0;
     document.getElementById('rd-notas').value = resumenGuardado ? (resumenGuardado.notas || '') : '';
     document.getElementById('rd-reset-utilidad').checked = resetUtilidad;
     document.getElementById('rd-reset-gastos').checked = resetGastos;
+    document.getElementById('rd-reset-cadivi').checked = resetCadivi;
+    document.getElementById('rd-reset-faltante').checked = resetFaltante;
     document.getElementById('rd-latin').value = otros.latin_debemos_ars || 0;
     document.getElementById('rd-moneygram').value = otros.moneygram_nos_debe_ars || 0;
     document.getElementById('rd-venezuela').value = otros.debo_venezuela_ars || 0;
@@ -1032,24 +1130,41 @@ async function guardarCierreDelDia(e) {
   const fecha = document.getElementById('rd-fecha').value;
   const resetUtilidad = document.getElementById('rd-reset-utilidad').checked;
   const resetGastos = document.getElementById('rd-reset-gastos').checked;
+  const resetCadivi = document.getElementById('rd-reset-cadivi').checked;
+  const resetFaltante = document.getElementById('rd-reset-faltante').checked;
 
   const utilidad = Number(document.getElementById('rd-utilidad').value) || 0;
   const gastosDia = Number(document.getElementById('rd-gastos-dia').value) || 0;
-  const faltante = Number(document.getElementById('rd-faltante').value) || 0;
-  const cadivi = Number(document.getElementById('rd-cadivi').value) || 0;
+  const faltanteDia = Number(document.getElementById('rd-faltante-dia').value) || 0;
+  const faltanteDescuento = Number(document.getElementById('rd-faltante-descuento').value) || 0;
+  const cadiviDia = Number(document.getElementById('rd-cadivi-dia').value) || 0;
+  const cadiviDescuentos = Number(document.getElementById('rd-cadivi-descuentos').value) || 0;
+  const cadiviAdicional = Number(document.getElementById('rd-cadivi-adicional').value) || 0;
 
   const c = _ultimoCalculoCierre;
   const utilidadAcumAnterior = resetUtilidad ? 0 : (c ? c.utilidadAcumAnterior : 0);
   const gastosAcumAnterior = resetGastos ? 0 : (c ? c.gastosAcumAnterior : 0);
+  const cadiviAcumAnterior = resetCadivi ? 0 : (c ? c.cadiviAcumAnterior : 0);
+  const faltanteAcumAnterior = resetFaltante ? 0 : (c ? c.faltanteAcumAnterior : 0);
+
   const utilidadAcumulada = utilidad + utilidadAcumAnterior;
   const gastosAcumulado = gastosDia + gastosAcumAnterior;
-  const total = utilidadAcumulada - gastosAcumulado + faltante;
+  const utilidadCadivi = cadiviAcumAnterior + cadiviDia - cadiviDescuentos + cadiviAdicional;
+  const faltanteSobrante = faltanteAcumAnterior + faltanteDia - faltanteDescuento;
+  // TOTAL = Utilidad acumulada - Gastos acumulado (confirmado contra la planilla real,
+  // el faltante/sobrante NO se suma aca -- solo interviene en el chequeo Debemos)
+  const total = utilidadAcumulada - gastosAcumulado;
 
   const body = {
     utilidad_diaria_ars: utilidad,
     gastos_dia_ars: gastosDia,
-    faltante_sobrante_ars: faltante,
-    utilidad_cadivi_ars: cadivi,
+    faltante_dia_ars: faltanteDia,
+    faltante_descuento_ars: faltanteDescuento,
+    faltante_sobrante_ars: faltanteSobrante,
+    cadivi_dia_ars: cadiviDia,
+    cadivi_descuentos_ars: cadiviDescuentos,
+    cadivi_adicional_ars: cadiviAdicional,
+    utilidad_cadivi_ars: utilidadCadivi,
     tasa_us_cierre: Number(document.getElementById('rd-tasa').value) || 0,
     utilidad_acumulada_ars: utilidadAcumulada,
     gastos_acumulado_ars: gastosAcumulado,
@@ -1057,6 +1172,8 @@ async function guardarCierreDelDia(e) {
     notas: document.getElementById('rd-notas').value,
     resetear_utilidad_acumulada: resetUtilidad,
     resetear_gastos_acumulado: resetGastos,
+    resetear_cadivi: resetCadivi,
+    resetear_faltante: resetFaltante,
   };
 
   try {
@@ -1740,7 +1857,7 @@ async function cargarCierreCompleto() {
   cont.innerHTML = '<div class="empty-state">Cargando...</div>';
 
   try {
-    const [motor, entradas, salidas, gastos, movPesos, resumen, otros, operaciones] = await Promise.all([
+    const [motor, entradas, salidas, gastos, movPesos, resumen, otros, operaciones, ajustes] = await Promise.all([
       Api.get('/motor/posiciones', { hasta: fecha }),
       Api.get('/entradas', { desde: fecha, hasta: fecha }),
       Api.get('/salidas', { desde: fecha, hasta: fecha }),
@@ -1749,6 +1866,7 @@ async function cargarCierreCompleto() {
       Api.get(`/resumen-diario/${fecha}`),
       Api.get(`/otros-saldos/${fecha}`),
       Api.get('/operaciones', { desde: fecha, hasta: fecha }),
+      Api.get('/ajustes-libres', { desde: fecha, hasta: fecha }),
     ]);
 
     cont.innerHTML = '';
@@ -1798,6 +1916,15 @@ async function cargarCierreCompleto() {
       { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
     ], movPesos, 'monto'));
 
+    // ---- Ajustes libres ----
+    cont.appendChild(panelTabla('🧩 Ajustes libres', [
+      { key: 'categoria', label: 'Categoría' }, { key: 'concepto', label: 'Concepto' },
+      { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
+      { key: 'afecta', label: 'Afecta a' },
+    ], ajustes, 'monto'));
+    const ajustesExistencia = ajustes.filter((a) => a.afecta === 'existencia').reduce((s, a) => s + Number(a.monto || 0), 0);
+    const ajustesDebemos = ajustes.filter((a) => a.afecta === 'debemos').reduce((s, a) => s + Number(a.monto || 0), 0);
+
     // ---- Otros saldos ----
     const o = otros || { latin_debemos_ars: 0, moneygram_nos_debe_ars: 0, debo_venezuela_ars: 0 };
     const panelOtros = UI.el('div', { class: 'panel', style: 'margin-bottom:16px;' }, [UI.el('h3', {}, '🌎 Otros saldos')]);
@@ -1819,10 +1946,10 @@ async function cargarCierreCompleto() {
     const salidaTotal = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
     const entradasTotal = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
     const existenciaTenencias = filasTenencias.reduce((s, f) => s + f.total_ars, 0);
-    const existencia = existenciaTenencias + salidaTotal + Number(o.moneygram_nos_debe_ars || 0);
+    const existencia = existenciaTenencias + salidaTotal + Number(o.moneygram_nos_debe_ars || 0) + ajustesExistencia;
     const faltanteSobrante = resumen ? Number(resumen.faltante_sobrante_ars || 0) : 0;
     const utilidadCadivi = resumen ? Number(resumen.utilidad_cadivi_ars || 0) : 0;
-    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(o.latin_debemos_ars || 0);
+    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(o.latin_debemos_ars || 0) + ajustesDebemos;
     const diferencia = existencia - debemos;
     const ok = Math.abs(diferencia) < 1;
 

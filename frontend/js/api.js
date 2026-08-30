@@ -17,6 +17,9 @@ const TABLA_POR_RECURSO = {
   'pagos-prestamos': 'prestamos_pagos',
   'comisiones-mensuales': 'comisiones_mensuales',
   'movimientos-pesos': 'movimientos_pesos',
+  'ajustes-libres': 'ajustes_libres',
+  'depositos-bancarios': 'depositos_bancarios',
+  'cierres-venezuela': 'cierres_venezuela',
 };
 
 function aplanarModenaJoin(fila) {
@@ -94,7 +97,7 @@ const Api = {
     if (recurso === 'usuarios') return this._listarUsuarios();
 
     // Tablas que no tienen moneda_id (siempre son en pesos): no intentar el join
-    const SIN_MONEDA = ['movimientos-pesos', 'resumen-diario', 'otros-saldos', 'utilidad-mensual', 'comisiones-mensuales'];
+    const SIN_MONEDA = ['movimientos-pesos', 'resumen-diario', 'otros-saldos', 'utilidad-mensual', 'comisiones-mensuales', 'ajustes-libres', 'depositos-bancarios'];
     const select = SIN_MONEDA.includes(recurso) ? '*' : '*, monedas(codigo,nombre)';
 
     let query = supabaseClient.from(tabla).select(select);
