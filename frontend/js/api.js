@@ -93,7 +93,11 @@ const Api = {
     if (recurso === 'monedas') return this._listarMonedas(params);
     if (recurso === 'usuarios') return this._listarUsuarios();
 
-    let query = supabaseClient.from(tabla).select('*, monedas(codigo,nombre)');
+    // Tablas que no tienen moneda_id (siempre son en pesos): no intentar el join
+    const SIN_MONEDA = ['movimientos-pesos', 'resumen-diario', 'otros-saldos', 'utilidad-mensual', 'comisiones-mensuales'];
+    const select = SIN_MONEDA.includes(recurso) ? '*' : '*, monedas(codigo,nombre)';
+
+    let query = supabaseClient.from(tabla).select(select);
     if (params.desde) query = query.gte('fecha', params.desde);
     if (params.hasta) query = query.lte('fecha', params.hasta);
     if (params.moneda_id) query = query.eq('moneda_id', params.moneda_id);
@@ -101,7 +105,7 @@ const Api = {
 
     const { data, error } = await query;
     if (error) throw new Error(error.message);
-    return data.map(aplanarModenaJoin);
+    return select.includes('monedas') ? data.map(aplanarModenaJoin) : data;
   },
 
   async _listarMonedas(params) {
