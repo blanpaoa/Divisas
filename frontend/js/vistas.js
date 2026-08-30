@@ -568,6 +568,7 @@ const vistaEntradas = crearVistaCrud({
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
     { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
+    { key: 'observaciones', label: 'Observaciones', type: 'text', default: () => '' },
   ],
   calcularTotal: calcularTotalEntradaSalidaGasto,
   columnas: [
@@ -576,6 +577,7 @@ const vistaEntradas = crearVistaCrud({
     { key: 'moneda_codigo', label: 'Moneda' },
     { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
     { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    { key: 'observaciones', label: 'Observaciones' },
   ],
 });
 
@@ -588,6 +590,7 @@ const vistaSalidas = crearVistaCrud({
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
     { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
+    { key: 'observaciones', label: 'Observaciones', type: 'text', default: () => '' },
   ],
   calcularTotal: calcularTotalEntradaSalidaGasto,
   columnas: [
@@ -596,6 +599,7 @@ const vistaSalidas = crearVistaCrud({
     { key: 'moneda_codigo', label: 'Moneda' },
     { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
     { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    { key: 'observaciones', label: 'Observaciones' },
   ],
 });
 
@@ -608,6 +612,7 @@ const vistaGastos = crearVistaCrud({
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
     { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
+    { key: 'observaciones', label: 'Observaciones', type: 'text', default: () => '' },
   ],
   calcularTotal: calcularTotalEntradaSalidaGasto,
   columnas: [
@@ -616,6 +621,7 @@ const vistaGastos = crearVistaCrud({
     { key: 'moneda_codigo', label: 'Moneda' },
     { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
     { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    { key: 'observaciones', label: 'Observaciones' },
   ],
 });
 
