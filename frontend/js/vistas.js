@@ -804,9 +804,11 @@ const vistaTasas = crearVistaCrud({
 });
 
 /* ======================================================================
-   CIERRE DIARIO (antes "Resumen diario") — utilidad y acumulado ahora se
-   calculan solos con el motor de costeo; el chequeo EXISTENCIA vs
-   DEBEMOS se muestra como auditoria automatica (igual que en la planilla).
+   CIERRE DIARIO — Utilidad y Gastos se acumulan por SEPARADO (cada uno
+   con su propio reset independiente), igual que la planilla real:
+     UTILIDAD ACUMULADA(hoy) = utilidad de hoy + UTILIDAD ACUMULADA(ayer)
+     GASTOS ACUMULADO(hoy)   = gastos de hoy   + GASTOS ACUMULADO(ayer)
+     TOTAL = UTILIDAD ACUMULADA - GASTOS ACUMULADO
    ====================================================================== */
 async function vistaResumenDiario(contenedor) {
   contenedor.innerHTML = `
@@ -826,14 +828,17 @@ async function vistaResumenDiario(contenedor) {
           <label>Utilidad del dia (ARS) — calculada, editable si hace falta</label>
           <input type="number" step="any" id="rd-utilidad" value="0" />
         </div>
-        <div><label>Descuentos (ARS)</label><input type="number" step="any" id="rd-descuentos" value="0" /></div>
-        <div><label>Utilidad adicional (ARS)</label><input type="number" step="any" id="rd-adicional" value="0" /></div>
+        <div><label>Gastos del dia (ARS) — calculado, editable si hace falta</label><input type="number" step="any" id="rd-gastos-dia" value="0" /></div>
         <div><label>Faltante / sobrante (ARS)</label><input type="number" step="any" id="rd-faltante" value="0" /></div>
         <div><label>Tasa US cierre (referencia)</label><input type="number" step="any" id="rd-tasa" value="0" /></div>
         <div>
-          <label>&nbsp;</label>
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
-            <input type="checkbox" id="rd-reset" style="width:auto; margin:0;" /> Resetear acumulado este dia
+            <input type="checkbox" id="rd-reset-utilidad" style="width:auto; margin:0;" /> Resetear utilidad acumulada
+          </label>
+        </div>
+        <div>
+          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
+            <input type="checkbox" id="rd-reset-gastos" style="width:auto; margin:0;" /> Resetear gastos acumulado
           </label>
         </div>
         <div class="form-row-full"><label>Notas</label><input type="text" id="rd-notas" /></div>
@@ -842,13 +847,14 @@ async function vistaResumenDiario(contenedor) {
     </div>
 
     <div class="panel" style="margin-bottom:20px;">
-      <h3>Otros saldos (Latin Express / MoneyGram) — opcional</h3>
+      <h3>Otros saldos (Latin Express / MoneyGram / Venezuela) — opcional</h3>
       <p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">
-        Sub-cuenta aparte de conciliacion con servicios de remesas. Si no la usan, dejenla en 0.
+        Sub-cuentas aparte de conciliacion. Si no las usan, dejenlas en 0.
       </p>
       <div class="form-grid">
         <div><label>Latin Express — les debemos (ARS)</label><input type="number" step="any" id="rd-latin" value="0" /></div>
         <div><label>MoneyGram — nos deben (ARS)</label><input type="number" step="any" id="rd-moneygram" value="0" /></div>
+        <div><label>Debo a Venezuela (ARS)</label><input type="number" step="any" id="rd-venezuela" value="0" /></div>
         <div class="form-row-full"><button type="button" class="btn-secondary" id="rd-guardar-otros">Guardar otros saldos</button></div>
       </div>
     </div>
@@ -884,10 +890,9 @@ async function calcularCierreDelDia() {
   chequeoWrap.innerHTML = '';
 
   try {
-    const [motor, tenenciasHoy, entradasHoy, salidasHoy, gastosHoy, resumenGuardado, otrosGuardados, historialAnterior] =
+    const [motor, entradasHoy, salidasHoy, gastosHoy, resumenGuardado, otrosGuardados, historialAnterior] =
       await Promise.all([
         Api.get('/motor/posiciones', { hasta: fecha }),
-        Api.get('/motor/posiciones', { hasta: fecha }), // se reutiliza abajo para EXISTENCIA
         Api.get('/entradas', { desde: fecha, hasta: fecha }),
         Api.get('/salidas', { desde: fecha, hasta: fecha }),
         Api.get('/gastos', { desde: fecha, hasta: fecha }),
@@ -902,26 +907,41 @@ async function calcularCierreDelDia() {
     );
     const salidaTotal = salidasHoy.reduce((s, r) => s + Number(r.total_ars || 0), 0);
     const entradasTotal = entradasHoy.reduce((s, r) => s + Number(r.total_ars || 0), 0);
-    const gastosTotal = gastosHoy.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const gastosTotalCalculado = gastosHoy.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const gastosDia = resumenGuardado ? Number(resumenGuardado.gastos_dia_ars || 0) : gastosTotalCalculado;
 
-    const otros = otrosGuardados || { latin_debemos_ars: 0, moneygram_nos_debe_ars: 0 };
+    const otros = otrosGuardados || { latin_debemos_ars: 0, moneygram_nos_debe_ars: 0, debo_venezuela_ars: 0 };
     const existencia = existenciaTenencias + salidaTotal + Number(otros.moneygram_nos_debe_ars || 0);
 
-    // saldo anterior = ultimo total_ars guardado antes de esta fecha (o 0 si no hay / reset)
+    // anterior = ultimo registro guardado antes de esta fecha
     const anterior = historialAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
-    const saldoAnterior = anterior ? Number(anterior.total_ars || 0) : 0;
+    const resetUtilidad = resumenGuardado ? !!resumenGuardado.resetear_utilidad_acumulada : false;
+    const resetGastos = resumenGuardado ? !!resumenGuardado.resetear_gastos_acumulado : false;
+    const utilidadAcumAnterior = (anterior && !resetUtilidad) ? Number(anterior.utilidad_acumulada_ars || 0) : 0;
+    const gastosAcumAnterior = (anterior && !resetGastos) ? Number(anterior.gastos_acumulado_ars || 0) : 0;
+
+    const utilidadParaAcum = resumenGuardado ? Number(resumenGuardado.utilidad_diaria_ars || 0) : utilidadDia;
+    const utilidadAcumulada = utilidadParaAcum + utilidadAcumAnterior;
+    const gastosAcumulado = gastosDia + gastosAcumAnterior;
+    const totalCierre = utilidadAcumulada - gastosAcumulado;
 
     const faltanteSobrante = resumenGuardado ? Number(resumenGuardado.faltante_sobrante_ars || 0) : 0;
-    const debemos = entradasTotal + utilidadDia + faltanteSobrante + Number(otros.latin_debemos_ars || 0);
+    const debemos = entradasTotal + utilidadDia + faltanteSobrante + Number(otros.latin_debemos_ars || 0) + Number(otros.debo_venezuela_ars || 0);
     const diferenciaChequeo = existencia - debemos;
 
-    _ultimoCalculoCierre = { fecha, utilidadDia, gastosTotal, saldoAnterior, existencia, debemos, diferenciaChequeo };
+    _ultimoCalculoCierre = {
+      fecha, utilidadDia, gastosTotalCalculado, gastosDia,
+      utilidadAcumAnterior, gastosAcumAnterior, utilidadAcumulada, gastosAcumulado, totalCierre,
+      existencia, debemos, diferenciaChequeo,
+    };
 
     cardsWrap.innerHTML = '';
     [
       { label: 'Utilidad del dia (compra/venta)', valor: utilidadDia, clase: utilidadDia >= 0 ? 'positivo' : 'negativo' },
-      { label: 'Gastos del dia', valor: gastosTotal, clase: 'negativo' },
-      { label: 'Saldo dia anterior', valor: saldoAnterior, clase: '' },
+      { label: 'Gastos del dia (cargados)', valor: gastosTotalCalculado, clase: 'negativo' },
+      { label: 'Utilidad acumulada', valor: utilidadAcumulada, clase: 'positivo' },
+      { label: 'Gastos acumulado', valor: gastosAcumulado, clase: 'negativo' },
+      { label: 'TOTAL (Utilidad acum. − Gastos acum.)', valor: totalCierre, clase: totalCierre >= 0 ? 'positivo' : 'negativo' },
       { label: 'Existencia (lo que tenemos)', valor: existencia, clase: '' },
       { label: 'Debemos (lo que se debe)', valor: debemos, clase: '' },
     ].forEach((it) => {
@@ -940,15 +960,16 @@ async function calcularCierreDelDia() {
     ));
 
     // precargar formulario
-    document.getElementById('rd-utilidad').value = resumenGuardado ? resumenGuardado.utilidad_diaria_ars : Math.round(utilidadDia);
-    document.getElementById('rd-descuentos').value = resumenGuardado ? resumenGuardado.descuentos_ars : 0;
-    document.getElementById('rd-adicional').value = resumenGuardado ? resumenGuardado.utilidad_adicional_ars : 0;
+    document.getElementById('rd-utilidad').value = resumenGuardado ? resumenGuardado.utilidad_diaria_ars : utilidadDia;
+    document.getElementById('rd-gastos-dia').value = resumenGuardado ? resumenGuardado.gastos_dia_ars : gastosTotalCalculado;
     document.getElementById('rd-faltante').value = resumenGuardado ? resumenGuardado.faltante_sobrante_ars : 0;
     document.getElementById('rd-tasa').value = resumenGuardado ? resumenGuardado.tasa_us_cierre : 0;
     document.getElementById('rd-notas').value = resumenGuardado ? (resumenGuardado.notas || '') : '';
-    document.getElementById('rd-reset').checked = resumenGuardado ? !!resumenGuardado.resetear_acumulado : false;
+    document.getElementById('rd-reset-utilidad').checked = resetUtilidad;
+    document.getElementById('rd-reset-gastos').checked = resetGastos;
     document.getElementById('rd-latin').value = otros.latin_debemos_ars || 0;
     document.getElementById('rd-moneygram').value = otros.moneygram_nos_debe_ars || 0;
+    document.getElementById('rd-venezuela').value = otros.debo_venezuela_ars || 0;
   } catch (err) {
     cardsWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
   }
@@ -963,27 +984,31 @@ function diaAnterior(fechaStr) {
 async function guardarCierreDelDia(e) {
   e.preventDefault();
   const fecha = document.getElementById('rd-fecha').value;
-  const resetear = document.getElementById('rd-reset').checked;
+  const resetUtilidad = document.getElementById('rd-reset-utilidad').checked;
+  const resetGastos = document.getElementById('rd-reset-gastos').checked;
 
   const utilidad = Number(document.getElementById('rd-utilidad').value) || 0;
-  const descuentos = Number(document.getElementById('rd-descuentos').value) || 0;
-  const adicional = Number(document.getElementById('rd-adicional').value) || 0;
+  const gastosDia = Number(document.getElementById('rd-gastos-dia').value) || 0;
   const faltante = Number(document.getElementById('rd-faltante').value) || 0;
-  const gastosTotal = _ultimoCalculoCierre ? _ultimoCalculoCierre.gastosTotal : 0;
-  const saldoAnterior = resetear ? 0 : (_ultimoCalculoCierre ? _ultimoCalculoCierre.saldoAnterior : 0);
 
-  const total = saldoAnterior + utilidad - gastosTotal - descuentos + adicional + faltante;
+  const c = _ultimoCalculoCierre;
+  const utilidadAcumAnterior = resetUtilidad ? 0 : (c ? c.utilidadAcumAnterior : 0);
+  const gastosAcumAnterior = resetGastos ? 0 : (c ? c.gastosAcumAnterior : 0);
+  const utilidadAcumulada = utilidad + utilidadAcumAnterior;
+  const gastosAcumulado = gastosDia + gastosAcumAnterior;
+  const total = utilidadAcumulada - gastosAcumulado + faltante;
 
   const body = {
-    saldo_dia_anterior_ars: saldoAnterior,
     utilidad_diaria_ars: utilidad,
-    descuentos_ars: descuentos,
-    utilidad_adicional_ars: adicional,
+    gastos_dia_ars: gastosDia,
     faltante_sobrante_ars: faltante,
     tasa_us_cierre: Number(document.getElementById('rd-tasa').value) || 0,
+    utilidad_acumulada_ars: utilidadAcumulada,
+    gastos_acumulado_ars: gastosAcumulado,
     total_ars: total,
     notas: document.getElementById('rd-notas').value,
-    resetear_acumulado: resetear,
+    resetear_utilidad_acumulada: resetUtilidad,
+    resetear_gastos_acumulado: resetGastos,
   };
 
   try {
@@ -1002,6 +1027,7 @@ async function guardarOtrosSaldos() {
     await Api.put(`/otros-saldos/${fecha}`, {
       latin_debemos_ars: Number(document.getElementById('rd-latin').value) || 0,
       moneygram_nos_debe_ars: Number(document.getElementById('rd-moneygram').value) || 0,
+      debo_venezuela_ars: Number(document.getElementById('rd-venezuela').value) || 0,
     });
     UI.toast('Otros saldos guardados.');
     await calcularCierreDelDia();
@@ -1020,17 +1046,21 @@ async function cargarHistorialResumen() {
     return;
   }
   const table = UI.el('table', {}, [
-    UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Saldo ant.', 'Utilidad diaria', 'Faltante/Sobrante', 'Total', 'Reset'].map((h) => UI.el('th', {}, h)))),
+    UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Utilidad dia', 'Gastos dia', 'Utilidad acum.', 'Gastos acum.', 'Total', 'Reset'].map((h) => UI.el('th', {}, h)))),
   ]);
   const tbody = UI.el('tbody');
   filas.forEach((f) => {
+    const reset = [];
+    if (f.resetear_utilidad_acumulada) reset.push('Util.');
+    if (f.resetear_gastos_acumulado) reset.push('Gast.');
     tbody.appendChild(UI.el('tr', {}, [
       UI.el('td', {}, f.fecha),
-      UI.el('td', {}, UI.formatoARS(f.saldo_dia_anterior_ars)),
       UI.el('td', {}, UI.formatoARS(f.utilidad_diaria_ars)),
-      UI.el('td', {}, UI.formatoARS(f.faltante_sobrante_ars)),
+      UI.el('td', {}, UI.formatoARS(f.gastos_dia_ars)),
+      UI.el('td', {}, UI.formatoARS(f.utilidad_acumulada_ars)),
+      UI.el('td', {}, UI.formatoARS(f.gastos_acumulado_ars)),
       UI.el('td', {}, UI.formatoARS(f.total_ars)),
-      UI.el('td', {}, f.resetear_acumulado ? '↺' : ''),
+      UI.el('td', {}, reset.length ? `↺ ${reset.join(', ')}` : ''),
     ]));
   });
   table.appendChild(tbody);
@@ -1091,7 +1121,7 @@ async function cargarUtilidadMensual() {
     const recalcularUs = () => {
       const tasa = Number(inputTasa.value) || 0;
       const ars = Number(inputArs.value) || 0;
-      if (tasa > 0) inputUs.value = (ars / tasa).toFixed(2);
+      if (tasa > 0) inputUs.value = ars / tasa;
     };
     inputTasa.addEventListener('input', recalcularUs);
     inputArs.addEventListener('input', recalcularUs);
@@ -1128,7 +1158,7 @@ async function autocompletarUtilidadAnual() {
     for (let mes = 1; mes <= 12; mes++) {
       const input = document.getElementById(`um-ars-${mes}`);
       if (input && totalesPorMes[mes] !== undefined) {
-        input.value = Math.round(totalesPorMes[mes]);
+        input.value = totalesPorMes[mes];
         input.dispatchEvent(new Event('input'));
       }
     }

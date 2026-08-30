@@ -1,7 +1,7 @@
 const UI = {
   formatoARS(valor) {
     const n = Number(valor) || 0;
-    return n.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 });
+    return n.toLocaleString('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 2, maximumFractionDigits: 2 });
   },
   formatoNumero(valor, decimales = 2) {
     const n = Number(valor) || 0;
