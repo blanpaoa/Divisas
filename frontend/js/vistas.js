@@ -867,6 +867,7 @@ async function vistaResumenDiario(contenedor) {
         </div>
         <div><label>Gastos del dia (ARS) — calculado, editable si hace falta</label><input type="number" step="any" id="rd-gastos-dia" value="0" /></div>
         <div><label>Faltante / sobrante (ARS)</label><input type="number" step="any" id="rd-faltante" value="0" /></div>
+        <div><label>Utilidad Cadivi (ARS)</label><input type="number" step="any" id="rd-cadivi" value="0" /></div>
         <div><label>Tasa US cierre (referencia)</label><input type="number" step="any" id="rd-tasa" value="0" /></div>
         <div>
           <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
@@ -967,7 +968,8 @@ async function calcularCierreDelDia() {
     const totalCierre = utilidadAcumulada - gastosAcumulado;
 
     const faltanteSobrante = resumenGuardado ? Number(resumenGuardado.faltante_sobrante_ars || 0) : 0;
-    const debemos = entradasTotal + utilidadDia + faltanteSobrante + Number(otros.latin_debemos_ars || 0) + Number(otros.debo_venezuela_ars || 0);
+    const utilidadCadivi = resumenGuardado ? Number(resumenGuardado.utilidad_cadivi_ars || 0) : 0;
+    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(otros.latin_debemos_ars || 0);
     const diferenciaChequeo = existencia - debemos;
 
     _ultimoCalculoCierre = {
@@ -1004,6 +1006,7 @@ async function calcularCierreDelDia() {
     document.getElementById('rd-utilidad').value = resumenGuardado ? resumenGuardado.utilidad_diaria_ars : utilidadDia;
     document.getElementById('rd-gastos-dia').value = resumenGuardado ? resumenGuardado.gastos_dia_ars : gastosTotalCalculado;
     document.getElementById('rd-faltante').value = resumenGuardado ? resumenGuardado.faltante_sobrante_ars : 0;
+    document.getElementById('rd-cadivi').value = resumenGuardado ? resumenGuardado.utilidad_cadivi_ars : 0;
     document.getElementById('rd-tasa').value = resumenGuardado ? resumenGuardado.tasa_us_cierre : 0;
     document.getElementById('rd-notas').value = resumenGuardado ? (resumenGuardado.notas || '') : '';
     document.getElementById('rd-reset-utilidad').checked = resetUtilidad;
@@ -1033,6 +1036,7 @@ async function guardarCierreDelDia(e) {
   const utilidad = Number(document.getElementById('rd-utilidad').value) || 0;
   const gastosDia = Number(document.getElementById('rd-gastos-dia').value) || 0;
   const faltante = Number(document.getElementById('rd-faltante').value) || 0;
+  const cadivi = Number(document.getElementById('rd-cadivi').value) || 0;
 
   const c = _ultimoCalculoCierre;
   const utilidadAcumAnterior = resetUtilidad ? 0 : (c ? c.utilidadAcumAnterior : 0);
@@ -1045,6 +1049,7 @@ async function guardarCierreDelDia(e) {
     utilidad_diaria_ars: utilidad,
     gastos_dia_ars: gastosDia,
     faltante_sobrante_ars: faltante,
+    utilidad_cadivi_ars: cadivi,
     tasa_us_cierre: Number(document.getElementById('rd-tasa').value) || 0,
     utilidad_acumulada_ars: utilidadAcumulada,
     gastos_acumulado_ars: gastosAcumulado,
@@ -1816,7 +1821,8 @@ async function cargarCierreCompleto() {
     const existenciaTenencias = filasTenencias.reduce((s, f) => s + f.total_ars, 0);
     const existencia = existenciaTenencias + salidaTotal + Number(o.moneygram_nos_debe_ars || 0);
     const faltanteSobrante = resumen ? Number(resumen.faltante_sobrante_ars || 0) : 0;
-    const debemos = entradasTotal + motor.utilidadDelDia + faltanteSobrante + Number(o.latin_debemos_ars || 0) + Number(o.debo_venezuela_ars || 0);
+    const utilidadCadivi = resumen ? Number(resumen.utilidad_cadivi_ars || 0) : 0;
+    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(o.latin_debemos_ars || 0);
     const diferencia = existencia - debemos;
     const ok = Math.abs(diferencia) < 1;
 
@@ -1847,6 +1853,8 @@ async function cargarCierreCompleto() {
       ['Gastos del día', r.gastos_dia_ars, 'negativo'],
       ['Utilidad acumulada', r.utilidad_acumulada_ars, 'positivo'],
       ['Gastos acumulado', r.gastos_acumulado_ars, 'negativo'],
+      ['Utilidad Cadivi', r.utilidad_cadivi_ars, ''],
+      ['Faltante / sobrante', r.faltante_sobrante_ars, ''],
       ['TOTAL', r.total_ars, (r.total_ars || 0) >= 0 ? 'positivo' : 'negativo'],
     ].forEach(([label, valor, clase]) => {
       gridCierre.appendChild(UI.el('div', { class: 'stat-card' }, [
@@ -1859,6 +1867,31 @@ async function cargarCierreCompleto() {
       panelCierre.appendChild(UI.el('div', { class: 'empty-state', style: 'margin-top:10px;' }, 'Este día todavía no tiene un Cierre diario guardado.'));
     }
     cont.appendChild(panelCierre);
+
+    // ---- Auto-chequeo final: (Existencia - Debemos) vs (Utilidad acum. - Gastos acum.) ----
+    // Dos formas independientes de llegar al mismo numero -- si no coinciden, hay algo mal cargado.
+    const utilidadEnPlanilla = diferencia; // = Existencia - Debemos
+    const totalUtilidadReal = Number(r.total_ars || 0); // = Utilidad acum. - Gastos acum.
+    const diferenciaFinal = utilidadEnPlanilla - totalUtilidadReal;
+    const okFinal = Math.abs(diferenciaFinal) < 2;
+
+    const panelAuto = UI.el('div', { class: 'panel', style: 'margin-top:16px;' }, [UI.el('h3', {}, '✅ Auto-chequeo final')]);
+    const gridAuto = UI.el('div', { class: 'cards-grid' });
+    [
+      ['Utilidad en planilla (Existencia − Debemos)', utilidadEnPlanilla, ''],
+      ['Total utilidad real (Utilidad acum. − Gastos acum.)', totalUtilidadReal, ''],
+      ['Diferencia', diferenciaFinal, okFinal ? 'positivo' : 'negativo'],
+    ].forEach(([label, valor, clase]) => {
+      gridAuto.appendChild(UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, label),
+        UI.el('div', { class: `value ${clase}` }, UI.formatoARS(valor)),
+      ]));
+    });
+    panelAuto.appendChild(gridAuto);
+    panelAuto.appendChild(UI.el('div', {
+      style: `margin-top:10px; padding:10px 14px; border-radius:8px; font-size:13px; background:${okFinal ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'}; color:${okFinal ? 'var(--primary)' : 'var(--danger)'};`,
+    }, okFinal ? '✓ Los dos calculos coinciden (diferencia de redondeo normal).' : '⚠ Los dos calculos no coinciden — revisar la carga del día.'));
+    cont.appendChild(panelAuto);
   } catch (err) {
     cont.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
   }

@@ -1,0 +1,21 @@
+-- =========================================================================
+-- Migracion: agrega "Utilidad Cadivi" a resumen_diario.
+--
+-- Se confirmo contra la planilla real (dia 24/08) que el calculo de
+-- DEBEMOS usa DOS valores que no son los que la app tenia:
+--
+--   DEBEMOS = ENTRADAS + UTILIDAD_CADIVI + DEBEMOS_A_LATIN + FALTANTES_DIARIOS
+--
+-- "UTILIDAD_CADIVI" es una cadena propia (independiente de la utilidad
+-- de compra/venta del motor de costeo): SALDO_DIA_ANTERIOR + UTILIDAD_DIARIA
+-- - DESCUENTOS + ADICIONAL, verificado exacto: 142.855 + 34.846 - 0 + 0 = 177.701
+--
+-- "FALTANTES_DIARIOS" ya existia como columna (faltante_sobrante_ars) pero
+-- estaba mal cargada -- debe ser el TOTAL de la cadena SALDO_ANTERIOR +
+-- SOBRANTE - DESCUENTO (verificado: 24.967+37-39=24.965), no el "sobrante"
+-- del dia solo.
+--
+-- Correr esto en: Supabase Dashboard -> SQL Editor -> New query
+-- =========================================================================
+
+alter table resumen_diario add column if not exists utilidad_cadivi_ars numeric not null default 0;
