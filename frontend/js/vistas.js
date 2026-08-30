@@ -299,8 +299,18 @@ function construirCampoInput(campo) {
       id: `campo-${campo.key}`,
       type: campo.type || 'text',
       step: campo.type === 'number' ? 'any' : undefined,
+      list: campo.sugerencias ? `sugerencias-${campo.key}` : undefined,
     });
     if (campo.default !== undefined) input.value = campo.default();
+    if (campo.sugerencias) {
+      wrap.appendChild(
+        UI.el(
+          'datalist',
+          { id: `sugerencias-${campo.key}` },
+          campo.sugerencias.map((s) => UI.el('option', { value: s }))
+        )
+      );
+    }
   }
   wrap.appendChild(input);
   return wrap;
@@ -526,17 +536,40 @@ const vistaOperaciones = crearVistaCrud({
 });
 
 
+// Formula confirmada contra la planilla real: cuando la moneda del renglon
+// es Pesos (ARS), el segundo campo ("%") es en realidad OTRO MONTO que se
+// SUMA (ej: "CTA BBVA LILI VENEZUELA | AR | 2.522.708 | 139.500 | 2.662.208").
+// Cuando la moneda es extranjera, ese campo es la cotizacion y MULTIPLICA
+// (ej: "ALO PRETA | US | 400 | 1.393,43 | 557.372").
+// Sugerencias de conceptos frecuentes, confirmadas contra la planilla real
+const CONCEPTOS_SUGERIDOS = [
+  'Latin',
+  'Moneygram',
+  'CTA BBVA Lili Venezuela',
+  'Comision Latin',
+  'Pago transferencia Colombia',
+  'Ingreso transferencia Colombia',
+];
+
+function calcularTotalEntradaSalidaGasto(body) {
+  const moneda = Estado.monedas.find((m) => m.id === Number(body.moneda_id));
+  const esPesos = moneda && moneda.codigo === 'ARS';
+  const valor = Number(body.valor) || 0;
+  const segundo = Number(body.porcentaje) || 0;
+  return { total_ars: esPesos ? valor + segundo : valor * segundo };
+}
+
 const vistaEntradas = crearVistaCrud({
   titulo: '⬇️ Entradas y prestamos (capital recibido)',
   endpoint: '/entradas',
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '' },
+    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: CONCEPTOS_SUGERIDOS },
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
-    { key: 'porcentaje', label: '% / Cotizacion', type: 'number', default: () => 0 },
+    { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
   ],
-  calcularTotal: (body) => ({ total_ars: Number(body.valor) * (Number(body.porcentaje) || 1) }),
+  calcularTotal: calcularTotalEntradaSalidaGasto,
   columnas: [
     { key: 'fecha', label: 'Fecha' },
     { key: 'concepto', label: 'Concepto' },
@@ -551,12 +584,12 @@ const vistaSalidas = crearVistaCrud({
   endpoint: '/salidas',
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '' },
+    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: CONCEPTOS_SUGERIDOS },
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
-    { key: 'porcentaje', label: '% / Cotizacion', type: 'number', default: () => 0 },
+    { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
   ],
-  calcularTotal: (body) => ({ total_ars: Number(body.valor) * (Number(body.porcentaje) || 1) }),
+  calcularTotal: calcularTotalEntradaSalidaGasto,
   columnas: [
     { key: 'fecha', label: 'Fecha' },
     { key: 'concepto', label: 'Concepto' },
@@ -571,12 +604,12 @@ const vistaGastos = crearVistaCrud({
   endpoint: '/gastos',
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '' },
+    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: CONCEPTOS_SUGERIDOS },
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
-    { key: 'porcentaje', label: '% / Cotizacion', type: 'number', default: () => 0 },
+    { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
   ],
-  calcularTotal: (body) => ({ total_ars: Number(body.valor) * (Number(body.porcentaje) || 1) }),
+  calcularTotal: calcularTotalEntradaSalidaGasto,
   columnas: [
     { key: 'fecha', label: 'Fecha' },
     { key: 'concepto', label: 'Concepto' },
@@ -586,32 +619,166 @@ const vistaGastos = crearVistaCrud({
   ],
 });
 
-const vistaTransferencias = crearVistaCrud({
-  titulo: '🌎 Transferencias (Venezuela / Colombia / otros)',
-  endpoint: '/transferencias',
-  campos: [
-    { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'destino', label: 'Destino', type: 'text', default: () => 'VENEZUELA' },
-    { key: 'tipo', label: 'Tipo', type: 'select', options: [
-      { value: 'debemos', label: 'Debemos' },
-      { value: 'abonos', label: 'Abonos' },
-      { value: 'ingreso', label: 'Ingreso' },
-      { value: 'egreso', label: 'Egreso' },
-    ] },
-    { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
-    { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
-    { key: 'notas', label: 'Notas', type: 'text', default: () => '' },
-  ],
-  calcularTotal: () => ({}),
-  columnas: [
-    { key: 'fecha', label: 'Fecha' },
-    { key: 'destino', label: 'Destino' },
-    { key: 'tipo', label: 'Tipo' },
-    { key: 'moneda_codigo', label: 'Moneda' },
-    { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
-    { key: 'notas', label: 'Notas' },
-  ],
-});
+async function vistaTransferencias(contenedor) {
+  await Estado.cargarMonedas();
+  contenedor.innerHTML = `
+    <header class="page-header"><h1>🌎 Transferencias (Colombia / Venezuela / otros)</h1></header>
+
+    <div class="panel" style="margin-bottom:20px;">
+      <h3>Nueva transferencia / movimiento</h3>
+      <form id="form-transferencia" class="form-grid">
+        <div><label>Fecha</label><input type="date" id="tr-fecha" value="${UI.hoy()}" /></div>
+        <div>
+          <label>Destino</label>
+          <input type="text" id="tr-destino" list="tr-destinos-sugeridos" value="COLOMBIA" />
+          <datalist id="tr-destinos-sugeridos">
+            <option value="COLOMBIA"></option>
+            <option value="VENEZUELA - BBVA"></option>
+          </datalist>
+        </div>
+        <div>
+          <label>Tipo</label>
+          <select id="tr-tipo">
+            <option value="ingreso">Ingreso (recibimos plata)</option>
+            <option value="egreso">Egreso (pagamos / enviamos)</option>
+            <option value="debemos">Debemos</option>
+            <option value="abonos">Abonos (pago de lo que debiamos)</option>
+          </select>
+        </div>
+        <div><label>Moneda</label><select id="tr-moneda"></select></div>
+        <div><label>Valor</label><input type="number" step="any" id="tr-valor" value="0" /></div>
+        <div><label>Referencia (Nº cuenta/transaccion, opcional)</label><input type="text" id="tr-referencia" /></div>
+        <div class="form-row-full"><label>Notas</label><input type="text" id="tr-notas" /></div>
+        <div class="form-row-full"><button type="submit" class="btn-primary">Guardar</button></div>
+      </form>
+    </div>
+
+    <div class="panel" style="margin-bottom:20px;">
+      <h3>Saldo neto por destino y moneda</h3>
+      <p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">
+        Ingresos + Abonos − Egresos − Debemos, sumando todo el historial cargado.
+      </p>
+      <div id="tr-resumen" class="cards-grid"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Historial</h3>
+      <div class="filters-bar">
+        <div><label>Desde</label><input type="date" id="f-desde" value="${UI.haceDias(60)}" /></div>
+        <div><label>Hasta</label><input type="date" id="f-hasta" value="${UI.hoy()}" /></div>
+        <button class="btn-secondary" id="f-aplicar">Filtrar</button>
+      </div>
+      <div id="tr-tabla-wrap"></div>
+    </div>
+  `;
+
+  const selectMoneda = document.getElementById('tr-moneda');
+  Estado.monedas.forEach((m) => {
+    selectMoneda.appendChild(UI.el('option', { value: m.id }, `${m.codigo} - ${m.nombre}`));
+  });
+
+  document.getElementById('form-transferencia').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await Api.post('/transferencias', {
+        fecha: document.getElementById('tr-fecha').value,
+        destino: document.getElementById('tr-destino').value,
+        tipo: document.getElementById('tr-tipo').value,
+        moneda_id: Number(selectMoneda.value),
+        valor: Number(document.getElementById('tr-valor').value) || 0,
+        referencia: document.getElementById('tr-referencia').value,
+        notas: document.getElementById('tr-notas').value,
+      });
+      UI.toast('Movimiento guardado.');
+      document.getElementById('form-transferencia').reset();
+      document.getElementById('tr-fecha').value = UI.hoy();
+      cargarTransferencias();
+    } catch (err) {
+      UI.toast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('f-aplicar').addEventListener('click', cargarTransferencias);
+  await cargarTransferencias();
+}
+
+async function cargarTransferencias() {
+  const desde = document.getElementById('f-desde').value;
+  const hasta = document.getElementById('f-hasta').value;
+  const resumenWrap = document.getElementById('tr-resumen');
+  const tablaWrap = document.getElementById('tr-tabla-wrap');
+  tablaWrap.innerHTML = '<div class="empty-state">Cargando...</div>';
+
+  // El resumen de saldo neto usa TODO el historial (no solo el filtro de fecha)
+  let todas, filtradas;
+  try {
+    [todas, filtradas] = await Promise.all([
+      Api.get('/transferencias', {}),
+      Api.get('/transferencias', { desde, hasta }),
+    ]);
+  } catch (err) {
+    tablaWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+    return;
+  }
+
+  const saldos = {}; // `${destino}|${moneda_codigo}` -> saldo
+  todas.forEach((t) => {
+    const key = `${t.destino}|${t.moneda_codigo}`;
+    const signo = (t.tipo === 'ingreso' || t.tipo === 'abonos') ? 1 : -1;
+    saldos[key] = (saldos[key] || 0) + signo * Number(t.valor || 0);
+  });
+
+  resumenWrap.innerHTML = '';
+  const entradasResumen = Object.entries(saldos);
+  if (entradasResumen.length === 0) {
+    resumenWrap.appendChild(UI.el('div', { class: 'empty-state' }, 'Todavia no hay movimientos cargados.'));
+  } else {
+    entradasResumen.forEach(([key, saldo]) => {
+      const [destino, monedaCodigo] = key.split('|');
+      resumenWrap.appendChild(UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, `${destino} (${monedaCodigo})`),
+        UI.el('div', { class: `value ${saldo >= 0 ? 'positivo' : 'negativo'}` }, UI.formatoNumero(saldo)),
+      ]));
+    });
+  }
+
+  if (filtradas.length === 0) {
+    tablaWrap.innerHTML = '<div class="empty-state">No hay movimientos en este periodo.</div>';
+    return;
+  }
+
+  const table = UI.el('table', {}, [
+    UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Destino', 'Tipo', 'Moneda', 'Valor', 'Referencia', 'Notas', ''].map((h) => UI.el('th', {}, h)))),
+  ]);
+  const tbody = UI.el('tbody');
+  filtradas.forEach((t) => {
+    tbody.appendChild(UI.el('tr', {}, [
+      UI.el('td', {}, t.fecha),
+      UI.el('td', {}, t.destino),
+      UI.el('td', {}, t.tipo),
+      UI.el('td', {}, t.moneda_codigo),
+      UI.el('td', {}, UI.formatoNumero(t.valor)),
+      UI.el('td', {}, t.referencia || ''),
+      UI.el('td', {}, t.notas || ''),
+      UI.el('td', { class: 'table-actions' }, UI.el('button', {
+        onclick: async () => {
+          if (!confirm('¿Eliminar este movimiento?')) return;
+          try {
+            await Api.delete(`/transferencias/${t.id}`);
+            UI.toast('Eliminado.');
+            cargarTransferencias();
+          } catch (err) {
+            UI.toast(err.message, 'error');
+          }
+        },
+      }, '🗑️')),
+    ]));
+  });
+  table.appendChild(tbody);
+  tablaWrap.innerHTML = '';
+  tablaWrap.appendChild(table);
+}
+
 
 const vistaTasas = crearVistaCrud({
   titulo: '💱 Tasa del dia',
@@ -878,16 +1045,24 @@ async function vistaUtilidadMensual(contenedor) {
       <div class="filters-bar">
         <div><label>Año</label><input type="number" id="um-anio" value="${anioActual}" /></div>
         <button class="btn-secondary" id="um-aplicar">Ver</button>
+        <button class="btn-secondary" id="um-autocompletar">🔄 Autocompletar Utilidades Libres desde Cierre diario</button>
       </div>
     </header>
+    <p style="color:var(--text-muted); font-size:13px; margin-top:-10px;">
+      "Utilidades Libres" (ARS) se puede autocompletar sumando la utilidad diaria ya calculada
+      en <strong>Cierre diario</strong> para cada mes. "Total US" se calcula solo dividiendo
+      Utilidades Libres por la Tasa de cierre que cargues — igual que en la planilla original.
+      Todo sigue siendo editable.
+    </p>
     <div class="panel">
       <table>
-        <thead><tr><th>Mes</th><th>Utilidad USD</th><th>Utilidad ARS</th><th>Notas</th><th></th></tr></thead>
+        <thead><tr><th>Mes</th><th>Tasa de cierre</th><th>Utilidades Libres (ARS)</th><th>Total US</th><th>Notas</th><th></th></tr></thead>
         <tbody id="um-tbody"></tbody>
       </table>
     </div>
   `;
   document.getElementById('um-aplicar').addEventListener('click', cargarUtilidadMensual);
+  document.getElementById('um-autocompletar').addEventListener('click', autocompletarUtilidadAnual);
   await cargarUtilidadMensual();
 }
 
@@ -900,24 +1075,69 @@ async function cargarUtilidadMensual() {
   const tbody = document.getElementById('um-tbody');
   tbody.innerHTML = '';
   for (let mes = 1; mes <= 12; mes++) {
-    const registro = porMes[mes] || { utilidad_us: 0, utilidad_ars: 0, notas: '' };
-    const idUs = `um-us-${mes}`, idArs = `um-ars-${mes}`, idNotas = `um-notas-${mes}`;
+    const registro = porMes[mes] || { utilidad_us: 0, utilidad_ars: 0, tasa_cierre: 0, notas: '' };
+    const idTasa = `um-tasa-${mes}`, idArs = `um-ars-${mes}`, idUs = `um-us-${mes}`, idNotas = `um-notas-${mes}`;
+
+    const inputTasa = UI.el('input', { type: 'number', step: 'any', id: idTasa, value: registro.tasa_cierre, style: 'margin-bottom:0;' });
+    const inputArs = UI.el('input', { type: 'number', step: 'any', id: idArs, value: registro.utilidad_ars, style: 'margin-bottom:0;' });
+    const inputUs = UI.el('input', { type: 'number', step: 'any', id: idUs, value: registro.utilidad_us, style: 'margin-bottom:0;' });
+
+    const recalcularUs = () => {
+      const tasa = Number(inputTasa.value) || 0;
+      const ars = Number(inputArs.value) || 0;
+      if (tasa > 0) inputUs.value = (ars / tasa).toFixed(2);
+    };
+    inputTasa.addEventListener('input', recalcularUs);
+    inputArs.addEventListener('input', recalcularUs);
+
     const tr = UI.el('tr', {}, [
       UI.el('td', {}, NOMBRES_MESES[mes - 1]),
-      UI.el('td', {}, UI.el('input', { type: 'number', step: 'any', id: idUs, value: registro.utilidad_us, style: 'margin-bottom:0;' })),
-      UI.el('td', {}, UI.el('input', { type: 'number', step: 'any', id: idArs, value: registro.utilidad_ars, style: 'margin-bottom:0;' })),
+      UI.el('td', {}, inputTasa),
+      UI.el('td', {}, inputArs),
+      UI.el('td', {}, inputUs),
       UI.el('td', {}, UI.el('input', { type: 'text', id: idNotas, value: registro.notas || '', style: 'margin-bottom:0;' })),
-      UI.el('td', {}, UI.el('button', { class: 'btn-secondary', onclick: () => guardarUtilidadMes(anio, mes, idUs, idArs, idNotas) }, 'Guardar')),
+      UI.el('td', {}, UI.el('button', { class: 'btn-secondary', onclick: () => guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa) }, 'Guardar')),
     ]);
     tbody.appendChild(tr);
   }
 }
 
-async function guardarUtilidadMes(anio, mes, idUs, idArs, idNotas) {
+// Suma la utilidad diaria (Cierre diario) de cada mes del año elegido, y precarga
+// el campo "Utilidades Libres" de cada fila con ese total (sin guardar todavia -- el
+// usuario revisa y toca "Guardar" en cada mes que le parezca correcto).
+async function autocompletarUtilidadAnual() {
+  const anio = Number(document.getElementById('um-anio').value);
+  UI.toast('Sumando utilidad diaria por mes...');
+  try {
+    const desde = `${anio}-01-01`;
+    const hasta = `${anio}-12-31`;
+    const filas = await Api.get('/resumen-diario', { desde, hasta });
+
+    const totalesPorMes = {};
+    filas.forEach((f) => {
+      const mes = Number(f.fecha.slice(5, 7));
+      totalesPorMes[mes] = (totalesPorMes[mes] || 0) + Number(f.utilidad_diaria_ars || 0);
+    });
+
+    for (let mes = 1; mes <= 12; mes++) {
+      const input = document.getElementById(`um-ars-${mes}`);
+      if (input && totalesPorMes[mes] !== undefined) {
+        input.value = Math.round(totalesPorMes[mes]);
+        input.dispatchEvent(new Event('input'));
+      }
+    }
+    UI.toast('Listo. Revisa cada mes y toca "Guardar" para confirmar.');
+  } catch (err) {
+    UI.toast(err.message, 'error');
+  }
+}
+
+async function guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa) {
   try {
     await Api.put(`/utilidad-mensual/${anio}/${mes}`, {
       utilidad_us: Number(document.getElementById(idUs).value) || 0,
       utilidad_ars: Number(document.getElementById(idArs).value) || 0,
+      tasa_cierre: Number(document.getElementById(idTasa).value) || 0,
       notas: document.getElementById(idNotas).value,
     });
     UI.toast(`${NOMBRES_MESES[mes - 1]} guardado.`);
@@ -929,6 +1149,91 @@ async function guardarUtilidadMes(anio, mes, idUs, idArs, idNotas) {
 /* ======================================================================
    MONEDAS
    ====================================================================== */
+/* ======================================================================
+   COMISIONES MENSUALES (Latin Express / MoneyGram)
+   ====================================================================== */
+async function vistaComisionesMensuales(contenedor) {
+  const anioActual = new Date().getFullYear();
+  contenedor.innerHTML = `
+    <header class="page-header">
+      <h1>💳 Comisiones Latin / Moneygram</h1>
+      <div class="filters-bar">
+        <div><label>Año</label><input type="number" id="cm-anio" value="${anioActual}" /></div>
+        <button class="btn-secondary" id="cm-aplicar">Ver</button>
+      </div>
+    </header>
+    <div class="panel">
+      <table>
+        <thead><tr><th>Mes</th><th>Latin</th><th>Money</th><th>Total</th><th>Fecha</th><th>Notas</th><th></th></tr></thead>
+        <tbody id="cm-tbody"></tbody>
+        <tfoot><tr style="font-weight:700;"><td>TOTAL AÑO</td><td id="cm-total-latin">0</td><td id="cm-total-money">0</td><td id="cm-total-total">0</td><td colspan="3"></td></tr></tfoot>
+      </table>
+    </div>
+  `;
+  document.getElementById('cm-aplicar').addEventListener('click', cargarComisionesMensuales);
+  await cargarComisionesMensuales();
+}
+
+async function cargarComisionesMensuales() {
+  const anio = document.getElementById('cm-anio').value;
+  const data = await Api.get('/comisiones-mensuales', { anio });
+  const porMes = {};
+  data.forEach((d) => { porMes[d.mes] = d; });
+
+  const tbody = document.getElementById('cm-tbody');
+  tbody.innerHTML = '';
+  let sumaLatin = 0, sumaMoney = 0;
+
+  for (let mes = 1; mes <= 12; mes++) {
+    const registro = porMes[mes] || { latin: 0, money: 0, fecha: '', notas: '' };
+    sumaLatin += Number(registro.latin || 0);
+    sumaMoney += Number(registro.money || 0);
+
+    const idLatin = `cm-latin-${mes}`, idMoney = `cm-money-${mes}`, idTotal = `cm-total-${mes}`;
+    const idFecha = `cm-fecha-${mes}`, idNotas = `cm-notas-${mes}`;
+
+    const inputLatin = UI.el('input', { type: 'number', step: 'any', id: idLatin, value: registro.latin, style: 'margin-bottom:0;' });
+    const inputMoney = UI.el('input', { type: 'number', step: 'any', id: idMoney, value: registro.money, style: 'margin-bottom:0;' });
+    const spanTotal = UI.el('span', { id: idTotal }, UI.formatoNumero(Number(registro.latin || 0) + Number(registro.money || 0)));
+
+    const recalcular = () => {
+      const total = (Number(inputLatin.value) || 0) + (Number(inputMoney.value) || 0);
+      spanTotal.textContent = UI.formatoNumero(total);
+    };
+    inputLatin.addEventListener('input', recalcular);
+    inputMoney.addEventListener('input', recalcular);
+
+    tbody.appendChild(UI.el('tr', {}, [
+      UI.el('td', {}, NOMBRES_MESES[mes - 1]),
+      UI.el('td', {}, inputLatin),
+      UI.el('td', {}, inputMoney),
+      UI.el('td', {}, spanTotal),
+      UI.el('td', {}, UI.el('input', { type: 'date', id: idFecha, value: registro.fecha || '', style: 'margin-bottom:0;' })),
+      UI.el('td', {}, UI.el('input', { type: 'text', id: idNotas, value: registro.notas || '', style: 'margin-bottom:0;' })),
+      UI.el('td', {}, UI.el('button', { class: 'btn-secondary', onclick: () => guardarComisionMes(anio, mes, idLatin, idMoney, idFecha, idNotas) }, 'Guardar')),
+    ]));
+  }
+
+  document.getElementById('cm-total-latin').textContent = UI.formatoNumero(sumaLatin);
+  document.getElementById('cm-total-money').textContent = UI.formatoNumero(sumaMoney);
+  document.getElementById('cm-total-total').textContent = UI.formatoNumero(sumaLatin + sumaMoney);
+}
+
+async function guardarComisionMes(anio, mes, idLatin, idMoney, idFecha, idNotas) {
+  try {
+    const fechaVal = document.getElementById(idFecha).value;
+    await Api.put(`/comisiones-mensuales/${anio}/${mes}`, {
+      latin: Number(document.getElementById(idLatin).value) || 0,
+      money: Number(document.getElementById(idMoney).value) || 0,
+      fecha: fechaVal || null,
+      notas: document.getElementById(idNotas).value,
+    });
+    UI.toast(`${NOMBRES_MESES[mes - 1]} guardado.`);
+  } catch (err) {
+    UI.toast(err.message, 'error');
+  }
+}
+
 async function vistaMonedas(contenedor) {
   contenedor.innerHTML = `
     <header class="page-header"><h1>🪙 Monedas</h1></header>
@@ -984,6 +1289,248 @@ async function cargarMonedasTabla() {
 /* ======================================================================
    USUARIOS (solo admin)
    ====================================================================== */
+/* ======================================================================
+   PRESTAMOS: con estado (pendiente/parcial/pagado) y saldo por persona
+   ====================================================================== */
+async function vistaPrestamos(contenedor) {
+  await Estado.cargarMonedas();
+  contenedor.innerHTML = `
+    <header class="page-header"><h1>🤝 Prestamos</h1></header>
+
+    <div class="panel" style="margin-bottom:20px;">
+      <h3>Nuevo prestamo</h3>
+      <form id="form-prestamo" class="form-grid">
+        <div>
+          <label>Tipo</label>
+          <select id="pr-tipo">
+            <option value="nos_deben">Nos deben (prestamos nosotros)</option>
+            <option value="debemos">Debemos (nos prestaron a nosotros)</option>
+          </select>
+        </div>
+        <div><label>Persona</label><input type="text" id="pr-persona" required /></div>
+        <div><label>Moneda</label><select id="pr-moneda"></select></div>
+        <div><label>Monto original</label><input type="number" step="any" id="pr-monto" value="0" /></div>
+        <div><label>Fecha</label><input type="date" id="pr-fecha" value="${UI.hoy()}" /></div>
+        <div class="form-row-full"><label>Concepto / notas</label><input type="text" id="pr-concepto" /></div>
+        <div class="form-row-full"><button type="submit" class="btn-primary">Guardar prestamo</button></div>
+      </form>
+    </div>
+
+    <div class="panel" style="margin-bottom:20px;">
+      <h3>Resumen por moneda (solo saldos pendientes)</h3>
+      <div id="pr-resumen" class="cards-grid"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Listado</h3>
+      <div class="filters-bar">
+        <div>
+          <label>Tipo</label>
+          <select id="f-tipo">
+            <option value="">Todos</option>
+            <option value="nos_deben">Nos deben</option>
+            <option value="debemos">Debemos</option>
+          </select>
+        </div>
+        <div>
+          <label>Estado</label>
+          <select id="f-estado">
+            <option value="">Todos</option>
+            <option value="pendiente">Pendiente</option>
+            <option value="parcial">Parcial</option>
+            <option value="pagado">Pagado</option>
+          </select>
+        </div>
+        <button class="btn-secondary" id="f-aplicar">Filtrar</button>
+      </div>
+      <div id="pr-tabla-wrap"></div>
+    </div>
+  `;
+
+  const selectMoneda = document.getElementById('pr-moneda');
+  Estado.monedas.forEach((m) => {
+    selectMoneda.appendChild(UI.el('option', { value: m.id }, `${m.codigo} - ${m.nombre}`));
+  });
+
+  document.getElementById('form-prestamo').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await Api.post('/prestamos', {
+        tipo: document.getElementById('pr-tipo').value,
+        persona: document.getElementById('pr-persona').value,
+        moneda_id: Number(selectMoneda.value),
+        monto_original: Number(document.getElementById('pr-monto').value) || 0,
+        fecha: document.getElementById('pr-fecha').value,
+        concepto: document.getElementById('pr-concepto').value,
+      });
+      UI.toast('Prestamo guardado.');
+      document.getElementById('form-prestamo').reset();
+      document.getElementById('pr-fecha').value = UI.hoy();
+      cargarPrestamos();
+    } catch (err) {
+      UI.toast(err.message, 'error');
+    }
+  });
+
+  document.getElementById('f-aplicar').addEventListener('click', cargarPrestamos);
+  await cargarPrestamos();
+}
+
+async function cargarPrestamos() {
+  const tipo = document.getElementById('f-tipo').value;
+  const estado = document.getElementById('f-estado').value;
+  const resumenWrap = document.getElementById('pr-resumen');
+  const tablaWrap = document.getElementById('pr-tabla-wrap');
+  tablaWrap.innerHTML = '<div class="empty-state">Cargando...</div>';
+
+  let prestamos;
+  try {
+    prestamos = await Api.get('/prestamos', { tipo, estado });
+  } catch (err) {
+    tablaWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+    return;
+  }
+
+  // Resumen de saldos pendientes por moneda y tipo
+  const resumen = {}; // `${tipo}|${moneda_codigo}` -> total
+  prestamos.forEach((p) => {
+    if (p.estado === 'pagado') return;
+    const key = `${p.tipo}|${p.moneda_codigo}`;
+    resumen[key] = (resumen[key] || 0) + p.saldo_pendiente;
+  });
+  resumenWrap.innerHTML = '';
+  const entradas = Object.entries(resumen);
+  if (entradas.length === 0) {
+    resumenWrap.appendChild(UI.el('div', { class: 'empty-state' }, 'No hay saldos pendientes.'));
+  } else {
+    entradas.forEach(([key, total]) => {
+      const [tipoKey, monedaCodigo] = key.split('|');
+      resumenWrap.appendChild(UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, `${tipoKey === 'nos_deben' ? 'Nos deben' : 'Debemos'} (${monedaCodigo})`),
+        UI.el('div', { class: `value ${tipoKey === 'nos_deben' ? 'positivo' : 'negativo'}` }, UI.formatoNumero(total)),
+      ]));
+    });
+  }
+
+  if (prestamos.length === 0) {
+    tablaWrap.innerHTML = '<div class="empty-state">No hay prestamos cargados.</div>';
+    return;
+  }
+
+  const table = UI.el('table', {}, [
+    UI.el('thead', {}, UI.el('tr', {}, ['Persona', 'Tipo', 'Moneda', 'Original', 'Pagado', 'Saldo', 'Estado', 'Fecha', ''].map((h) => UI.el('th', {}, h)))),
+  ]);
+  const tbody = UI.el('tbody');
+  prestamos.forEach((p) => {
+    const filaId = `pr-fila-${p.id}`;
+    const badgeEstado = { pendiente: 'venta', parcial: 'operador', pagado: 'compra' }[p.estado] || '';
+    tbody.appendChild(UI.el('tr', { id: filaId }, [
+      UI.el('td', {}, p.persona),
+      UI.el('td', {}, p.tipo === 'nos_deben' ? 'Nos deben' : 'Debemos'),
+      UI.el('td', {}, p.moneda_codigo),
+      UI.el('td', {}, UI.formatoNumero(p.monto_original)),
+      UI.el('td', {}, UI.formatoNumero(p.pagado)),
+      UI.el('td', {}, UI.formatoNumero(p.saldo_pendiente)),
+      UI.el('td', { html: `<span class="badge ${badgeEstado}">${p.estado}</span>` }),
+      UI.el('td', {}, p.fecha),
+      UI.el('td', { class: 'table-actions' }, [
+        UI.el('button', {
+          onclick: () => mostrarFormularioPago(p),
+        }, '💵 Pago'),
+        UI.el('button', {
+          onclick: () => mostrarHistorialPagos(p),
+        }, '📜'),
+        UI.el('button', {
+          onclick: async () => {
+            if (!confirm('¿Eliminar este prestamo y todos sus pagos?')) return;
+            try {
+              await Api.delete(`/prestamos/${p.id}`);
+              UI.toast('Prestamo eliminado.');
+              cargarPrestamos();
+            } catch (err) {
+              UI.toast(err.message, 'error');
+            }
+          },
+        }, '🗑️'),
+      ]),
+    ]));
+  });
+  table.appendChild(tbody);
+  tablaWrap.innerHTML = '';
+  tablaWrap.appendChild(table);
+}
+
+function mostrarFormularioPago(prestamo) {
+  const fila = document.getElementById(`pr-fila-${prestamo.id}`);
+  if (!fila) return;
+  const idMonto = `pago-monto-${prestamo.id}`;
+  const idFecha = `pago-fecha-${prestamo.id}`;
+
+  const filaPago = UI.el('tr', {}, UI.el('td', { colspan: '9', style: 'background:var(--bg-panel-light);' }, [
+    UI.el('div', { class: 'form-grid', style: 'align-items:end;' }, [
+      UI.el('div', {}, [UI.el('label', {}, `Monto del pago (saldo: ${UI.formatoNumero(prestamo.saldo_pendiente)})`), UI.el('input', { type: 'number', step: 'any', id: idMonto, value: prestamo.saldo_pendiente })]),
+      UI.el('div', {}, [UI.el('label', {}, 'Fecha'), UI.el('input', { type: 'date', id: idFecha, value: UI.hoy() })]),
+      UI.el('div', {}, [
+        UI.el('button', {
+          class: 'btn-primary',
+          onclick: async () => {
+            try {
+              await Api.post('/pagos-prestamos', {
+                prestamo_id: prestamo.id,
+                monto: Number(document.getElementById(idMonto).value) || 0,
+                fecha: document.getElementById(idFecha).value,
+              });
+              UI.toast('Pago registrado.');
+              cargarPrestamos();
+            } catch (err) {
+              UI.toast(err.message, 'error');
+            }
+          },
+        }, 'Confirmar pago'),
+      ]),
+      UI.el('div', {}, [UI.el('button', { class: 'btn-secondary', onclick: () => cargarPrestamos() }, 'Cancelar')]),
+    ]),
+  ]));
+  fila.replaceWith(filaPago);
+}
+
+async function mostrarHistorialPagos(prestamo) {
+  const fila = document.getElementById(`pr-fila-${prestamo.id}`);
+  if (!fila) return;
+  let pagos;
+  try {
+    pagos = await Api.get('/pagos-prestamos', { prestamo_id: prestamo.id });
+  } catch (err) {
+    UI.toast(err.message, 'error');
+    return;
+  }
+  const contenido = pagos.length === 0
+    ? UI.el('p', { style: 'color:var(--text-muted); margin:0;' }, 'Todavia no tiene pagos registrados.')
+    : UI.el('table', {}, [
+        UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Monto', ''].map((h) => UI.el('th', {}, h)))),
+        UI.el('tbody', {}, pagos.map((pg) => UI.el('tr', {}, [
+          UI.el('td', {}, pg.fecha),
+          UI.el('td', {}, UI.formatoNumero(pg.monto)),
+          UI.el('td', {}, UI.el('button', {
+            onclick: async () => {
+              if (!confirm('¿Eliminar este pago?')) return;
+              await Api.delete(`/pagos-prestamos/${pg.id}`);
+              cargarPrestamos();
+            },
+          }, '🗑️')),
+        ]))),
+      ]);
+
+  const filaDetalle = UI.el('tr', {}, UI.el('td', { colspan: '9', style: 'background:var(--bg-panel-light);' }, [
+    UI.el('div', {}, [
+      UI.el('strong', {}, `Pagos de ${prestamo.persona}`),
+      contenido,
+      UI.el('button', { class: 'btn-secondary', style: 'margin-top:8px;', onclick: () => cargarPrestamos() }, 'Cerrar'),
+    ]),
+  ]));
+  fila.replaceWith(filaDetalle);
+}
+
 async function vistaUsuarios(contenedor) {
   contenedor.innerHTML = `
     <header class="page-header"><h1>👤 Usuarios</h1></header>

@@ -13,6 +13,9 @@ const TABLA_POR_RECURSO = {
   tasas: 'tasas_diarias',
   apertura: 'apertura_saldos',
   'otros-saldos': 'otros_saldos_diarios',
+  prestamos: 'prestamos',
+  'pagos-prestamos': 'prestamos_pagos',
+  'comisiones-mensuales': 'comisiones_mensuales',
 };
 
 function aplanarModenaJoin(fila) {
@@ -76,7 +79,10 @@ const Api = {
     if (path.startsWith('/resumen-diario/')) return this._resumenDeFecha(path.split('/')[2]);
     if (path.startsWith('/otros-saldos/')) return this._otrosSaldosDeFecha(path.split('/')[2]);
     if (path.startsWith('/utilidad-mensual')) return this._listarUtilidadMensual(params);
+    if (path.startsWith('/comisiones-mensuales')) return this._listarComisionesMensuales(params);
     if (path === '/motor/posiciones') return this._motorPosiciones(params);
+    if (path === '/prestamos') return this._listarPrestamosConSaldo(params);
+    if (path.startsWith('/pagos-prestamos')) return this._listarPagos(params.prestamo_id);
 
     const partes = path.split('/').filter(Boolean); // ej: ["tenencias"]
     const recurso = partes[0];
@@ -136,6 +142,14 @@ const Api = {
 
   async _listarUtilidadMensual(params) {
     let query = supabaseClient.from('utilidad_mensual').select('*').order('mes');
+    if (params.anio) query = query.eq('anio', params.anio);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async _listarComisionesMensuales(params) {
+    let query = supabaseClient.from('comisiones_mensuales').select('*').order('mes');
     if (params.anio) query = query.eq('anio', params.anio);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -208,6 +222,19 @@ const Api = {
       return { ok: true };
     }
 
+    if (path.startsWith('/comisiones-mensuales/')) {
+      const [, , anio, mes] = path.split('/');
+      const usuario = this.getUsuario();
+      const { error } = await supabaseClient
+        .from('comisiones_mensuales')
+        .upsert(
+          { anio: Number(anio), mes: Number(mes), ...body, usuario_id: usuario ? usuario.id : null },
+          { onConflict: 'anio,mes' }
+        );
+      if (error) throw new Error(error.message);
+      return { ok: true };
+    }
+
     const partes = path.split('/').filter(Boolean); // ej: ["monedas", "3"]
     const tabla = TABLA_POR_RECURSO[partes[0]];
     const id = partes[1];
@@ -248,6 +275,58 @@ const Api = {
       .maybeSingle();
     if (error) throw new Error(error.message);
     return data ? data.cotizacion : null;
+  },
+
+  /* ===================== PRESTAMOS (con saldo y estado) ===================== */
+  async _listarPrestamosConSaldo({ tipo, estado } = {}) {
+    let query = supabaseClient
+      .from('prestamos')
+      .select('*, monedas(codigo,nombre)')
+      .order('fecha', { ascending: false });
+    if (tipo) query = query.eq('tipo', tipo);
+    const { data: prestamosData, error } = await query;
+    if (error) throw new Error(error.message);
+
+    const ids = prestamosData.map((p) => p.id);
+    let pagosPorPrestamo = {};
+    if (ids.length > 0) {
+      const { data: pagosData, error: errPagos } = await supabaseClient
+        .from('prestamos_pagos')
+        .select('prestamo_id, monto')
+        .in('prestamo_id', ids);
+      if (errPagos) throw new Error(errPagos.message);
+      pagosData.forEach((p) => {
+        pagosPorPrestamo[p.prestamo_id] = (pagosPorPrestamo[p.prestamo_id] || 0) + Number(p.monto);
+      });
+    }
+
+    let resultado = prestamosData.map((p) => {
+      const pagado = pagosPorPrestamo[p.id] || 0;
+      const saldo_pendiente = Number(p.monto_original) - pagado;
+      let est = 'pendiente';
+      if (saldo_pendiente <= 0.01) est = 'pagado';
+      else if (pagado > 0) est = 'parcial';
+      return {
+        ...aplanarModenaJoin(p),
+        pagado,
+        saldo_pendiente,
+        estado: est,
+      };
+    });
+
+    if (estado) resultado = resultado.filter((p) => p.estado === estado);
+    return resultado;
+  },
+
+  async _listarPagos(prestamoId) {
+    if (!prestamoId) return [];
+    const { data, error } = await supabaseClient
+      .from('prestamos_pagos')
+      .select('*')
+      .eq('prestamo_id', prestamoId)
+      .order('fecha', { ascending: false });
+    if (error) throw new Error(error.message);
+    return data;
   },
 
   /* ===================== MOTOR DE COSTEO (WAC) ===================== */

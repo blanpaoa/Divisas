@@ -68,30 +68,23 @@ acceso real a los datos queda controlado por las políticas de RLS que corrió e
 
 ---
 
-## Paso 2 — Configurar el frontend
+## Paso 2 — Configurar el frontend (variables de entorno)
 
-Abrí `frontend/js/config.js` y completá:
-
-```js
-window.SUPABASE_CONFIG = {
-  url: 'https://TU-PROYECTO.supabase.co',
-  anonKey: 'TU_ANON_KEY_ACA',
-};
-```
-
-Con esos dos datos que copiaste de Supabase.
+Las credenciales de Supabase **ya no se escriben directamente en el código**: se generan solas
+a partir de variables de entorno cuando Vercel hace el deploy.
 
 ### Probarlo en tu computadora antes de desplegar (opcional)
 
-No hace falta instalar nada especial. Desde la carpeta `frontend/`, cualquier servidor
-estático sirve, por ejemplo:
-
 ```bash
 cd frontend
+cp .env.example .env
+# Editá .env y completá SUPABASE_URL y SUPABASE_ANON_KEY con los datos de tu proyecto
+npm run build   # genera js/config.js a partir de esas variables (no instala nada, es Node puro)
 npx serve .
 ```
 
-Y abrís la URL que te muestre en la terminal.
+Y abrís la URL que te muestre la terminal. El archivo `.env` y el `js/config.js` generado
+**no se suben a git** (están en `.gitignore`) — cada máquina genera el suyo.
 
 ---
 
@@ -101,18 +94,27 @@ Y abrís la URL que te muestre en la terminal.
 2. Entra a [vercel.com](https://vercel.com) → **Add New… → Project** → importá ese repositorio.
 3. En la pantalla de configuración del proyecto:
    - **Root Directory**: elegí `frontend` (importante — ahí es donde está el `index.html`).
-   - **Framework Preset**: dejalo en "Other" / ninguno — no hace falta build.
-   - **Build Command**: dejalo vacío.
+   - **Framework Preset**: dejalo en "Other" / ninguno.
+   - **Build Command**: `npm run build` (esto genera `js/config.js` a partir de las variables
+     de entorno antes de publicar el sitio).
    - **Output Directory**: dejalo vacío (usa la raíz de `frontend`).
-4. Deploy. En un minuto vas a tener una URL tipo `tu-proyecto.vercel.app` funcionando.
+4. Antes de tocar Deploy, abrí la sección **Environment Variables** (misma pantalla) y agregá:
 
-Como `frontend/js/config.js` ya tiene las credenciales de Supabase adentro del código (son
-públicas por diseño), no hace falta configurar variables de entorno en Vercel para que
-funcione.
+   | Name | Value |
+   |---|---|
+   | `SUPABASE_URL` | La *Project URL* de tu proyecto Supabase |
+   | `SUPABASE_ANON_KEY` | La *anon public key* de tu proyecto Supabase |
+
+5. Deploy. En un minuto vas a tener una URL tipo `tu-proyecto.vercel.app` funcionando.
+
+Si en algún momento cambiás de proyecto de Supabase (o rotás la anon key), solo tenés que
+actualizar esas dos variables en **Project Settings → Environment Variables** y volver a
+desplegar (Vercel tiene un botón "Redeploy") — no hace falta tocar código ni hacer otro commit.
 
 ### Actualizaciones futuras
 
-Cada vez que hagas `git push` a la rama conectada, Vercel vuelve a desplegar automáticamente.
+Cada vez que hagas `git push` a la rama conectada, Vercel vuelve a desplegar automáticamente
+(y vuelve a correr `npm run build`, regenerando `config.js` con las variables configuradas).
 
 ---
 
@@ -203,6 +205,28 @@ frontend, se hace en dos pasos:
 - **Transferencias** hacia Venezuela / Colombia / otros destinos
 - **Resumen diario** (saldo día anterior, utilidad diaria, faltante/sobrante)
 - **Utilidad mensual** (tabla Enero-Diciembre)
+- **Préstamos** (nuevo, no existía en la planilla como tal): a diferencia de la planilla, que
+  solo tenía renglones sueltos de "SALIDA-PRESTAMOS" y "ENTRADA Y PREST." sin forma de saber
+  qué seguía pendiente, esta vista trackea cada préstamo por persona con estado
+  (pendiente / parcial / pagado) y saldo actualizado a medida que se registran pagos.
+- **Comisiones Latin / Moneygram** (tabla mensual Latin + Money = Total).
+- **Transferencias** ahora también sirve para el circuito de Colombia (recibido para enviar /
+  pagado) y la cuenta BBVA de Venezuela, con un resumen de saldo neto por destino y moneda.
+
+## Lo que se investigó a fondo en las planillas originales, y lo que quedó pendiente
+
+Se revisaron ambas planillas con un script que compara los números reales día por día (no es
+una lectura superficial) para encontrar las fórmulas exactas detrás del cierre de caja. Quedó
+confirmado y anda funcionando en la app: el costeo promedio ponderado, el acumulado diario, el
+chequeo Existencia=Debemos, y ahora también Colombia/Venezuela y las comisiones mensuales.
+
+Se identificaron pero **todavía no se modelaron** (aparecen en la planilla pero no hay pantalla
+dedicada en la app todavía): la cuenta corriente detallada de MoneyGram/Latin Express (los
+saldos acumulados de cientos de millones — se puede cargar un neto simple en Cierre diario →
+Otros saldos, pero no el detalle transacción por transacción), el conteo físico de billetes
+(arqueos), y algunos gastos fijos recurrentes que en la planilla aparecen como una lista aparte
+("PAGO OBLIGACIONES": alquiler, limpieza, agua, ABL). Si alguno de estos se usa activamente,
+se puede sumar como módulo nuevo.
 
 ## Backups
 
