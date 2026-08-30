@@ -363,6 +363,20 @@ async function cargarTablaCrud(cfg, puedeEscribir) {
     }
     tbody.appendChild(UI.el('tr', {}, tds));
   });
+
+  // Fila de TOTAL (suma la columna total_ars, si la tabla la tiene) -- igual
+  // que el renglon "TOTAL" al pie de las tablas en la planilla original.
+  const colTotal = cfg.columnas.find((c) => c.key === 'total_ars');
+  if (colTotal) {
+    const suma = filas.reduce((s, f) => s + (Number(f.total_ars) || 0), 0);
+    const tdsTotal = cfg.columnas.map((c, i) => {
+      if (i === 0) return UI.el('td', { style: 'font-weight:700;' }, 'TOTAL');
+      if (c.key === 'total_ars') return UI.el('td', { style: 'font-weight:700;' }, UI.formatoARS(suma));
+      return UI.el('td', {}, '');
+    });
+    if (puedeEscribir) tdsTotal.push(UI.el('td', {}, ''));
+    tbody.appendChild(UI.el('tr', { style: 'background:var(--bg-panel-light);' }, tdsTotal));
+  }
   table.appendChild(tbody);
   wrap.innerHTML = '';
   wrap.appendChild(table);
@@ -1665,4 +1679,187 @@ async function cargarUsuariosTabla() {
       }, u.activo ? '🚫 Desactivar' : '✅ Activar')),
     ]));
   });
+}
+
+/* ======================================================================
+   CIERRE COMPLETO — todo lo del dia en una sola pantalla, igual que un
+   dia completo en la planilla original (solo lectura; para editar cada
+   cosa se usa su pantalla propia).
+   ====================================================================== */
+async function vistaCierreCompleto(contenedor) {
+  await Estado.cargarMonedas();
+  contenedor.innerHTML = `
+    <header class="page-header">
+      <h1>🗂️ Cierre completo del día</h1>
+      <div class="filters-bar">
+        <div><label>Fecha</label><input type="date" id="cc-fecha" value="${UI.hoy()}" /></div>
+        <button class="btn-secondary" id="cc-ver">Ver</button>
+      </div>
+    </header>
+    <div id="cc-contenido"><div class="empty-state">Cargando...</div></div>
+  `;
+  document.getElementById('cc-ver').addEventListener('click', cargarCierreCompleto);
+  await cargarCierreCompleto();
+}
+
+function panelTabla(titulo, columnas, filas, totalKey) {
+  const panel = UI.el('div', { class: 'panel', style: 'margin-bottom:16px;' }, [UI.el('h3', {}, titulo)]);
+  if (filas.length === 0) {
+    panel.appendChild(UI.el('div', { class: 'empty-state' }, 'Sin registros.'));
+    return panel;
+  }
+  const table = UI.el('table', {}, [
+    UI.el('thead', {}, UI.el('tr', {}, columnas.map((c) => UI.el('th', {}, c.label)))),
+  ]);
+  const tbody = UI.el('tbody');
+  filas.forEach((fila) => {
+    tbody.appendChild(UI.el('tr', {}, columnas.map((c) => UI.el('td', {}, c.render ? c.render(fila) : String(fila[c.key] ?? '')))));
+  });
+  if (totalKey) {
+    const suma = filas.reduce((s, f) => s + (Number(f[totalKey]) || 0), 0);
+    const tds = columnas.map((c, i) => {
+      if (i === 0) return UI.el('td', { style: 'font-weight:700;' }, 'TOTAL');
+      if (c.key === totalKey) return UI.el('td', { style: 'font-weight:700;' }, UI.formatoARS(suma));
+      return UI.el('td', {}, '');
+    });
+    tbody.appendChild(UI.el('tr', { style: 'background:var(--bg-panel-light);' }, tds));
+  }
+  table.appendChild(tbody);
+  panel.appendChild(table);
+  return panel;
+}
+
+async function cargarCierreCompleto() {
+  const fecha = document.getElementById('cc-fecha').value;
+  const cont = document.getElementById('cc-contenido');
+  cont.innerHTML = '<div class="empty-state">Cargando...</div>';
+
+  try {
+    const [motor, entradas, salidas, gastos, movPesos, resumen, otros, operaciones] = await Promise.all([
+      Api.get('/motor/posiciones', { hasta: fecha }),
+      Api.get('/entradas', { desde: fecha, hasta: fecha }),
+      Api.get('/salidas', { desde: fecha, hasta: fecha }),
+      Api.get('/gastos', { desde: fecha, hasta: fecha }),
+      Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
+      Api.get(`/resumen-diario/${fecha}`),
+      Api.get(`/otros-saldos/${fecha}`),
+      Api.get('/operaciones', { desde: fecha, hasta: fecha }),
+    ]);
+
+    cont.innerHTML = '';
+
+    // ---- Posicion actual (tenencias) ----
+    const filasTenencias = Object.entries(motor.monedas || {})
+      .map(([id, pos]) => ({ moneda: Estado.nombreMoneda(id), cantidad: pos.cantidad, costo_promedio: pos.costo_promedio, total_ars: pos.cantidad * pos.costo_promedio }))
+      .filter((f) => Math.abs(f.cantidad) > 0.0001)
+      .sort((a, b) => b.total_ars - a.total_ars);
+    cont.appendChild(panelTabla('💰 Posición actual (al ' + (motor.fechaCalculada || fecha) + ')', [
+      { key: 'moneda', label: 'Moneda' },
+      { key: 'cantidad', label: 'Cantidad', render: (f) => UI.formatoNumero(f.cantidad) },
+      { key: 'costo_promedio', label: 'Costo promedio', render: (f) => UI.formatoNumero(f.costo_promedio) },
+      { key: 'total_ars', label: 'Valor ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], filasTenencias, 'total_ars'));
+
+    // ---- Compra / Venta del dia ----
+    cont.appendChild(panelTabla('🔄 Compra / Venta del día', [
+      { key: 'tipo', label: 'Tipo' },
+      { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'cantidad', label: 'Cantidad', render: (f) => UI.formatoNumero(f.cantidad) },
+      { key: 'cotizacion', label: 'Cotización', render: (f) => UI.formatoNumero(f.cotizacion) },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], operaciones, 'total_ars'));
+
+    // ---- Entradas / Salidas / Gastos ----
+    cont.appendChild(panelTabla('⬇️ Entradas y préstamos', [
+      { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], entradas, 'total_ars'));
+
+    cont.appendChild(panelTabla('⬆️ Salidas / préstamos', [
+      { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], salidas, 'total_ars'));
+
+    cont.appendChild(panelTabla('🧾 Gastos', [
+      { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], gastos, 'total_ars'));
+
+    cont.appendChild(panelTabla('💵 Movimientos de pesos', [
+      { key: 'tipo', label: 'Tipo' }, { key: 'concepto', label: 'Concepto' },
+      { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
+    ], movPesos, 'monto'));
+
+    // ---- Otros saldos ----
+    const o = otros || { latin_debemos_ars: 0, moneygram_nos_debe_ars: 0, debo_venezuela_ars: 0 };
+    const panelOtros = UI.el('div', { class: 'panel', style: 'margin-bottom:16px;' }, [UI.el('h3', {}, '🌎 Otros saldos')]);
+    const gridOtros = UI.el('div', { class: 'cards-grid' });
+    [
+      ['Latin Express — les debemos', o.latin_debemos_ars],
+      ['MoneyGram — nos deben', o.moneygram_nos_debe_ars],
+      ['Debo a Venezuela', o.debo_venezuela_ars],
+    ].forEach(([label, valor]) => {
+      gridOtros.appendChild(UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, label),
+        UI.el('div', { class: 'value' }, UI.formatoARS(valor || 0)),
+      ]));
+    });
+    panelOtros.appendChild(gridOtros);
+    cont.appendChild(panelOtros);
+
+    // ---- Existencia vs Debemos ----
+    const salidaTotal = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const entradasTotal = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const existenciaTenencias = filasTenencias.reduce((s, f) => s + f.total_ars, 0);
+    const existencia = existenciaTenencias + salidaTotal + Number(o.moneygram_nos_debe_ars || 0);
+    const faltanteSobrante = resumen ? Number(resumen.faltante_sobrante_ars || 0) : 0;
+    const debemos = entradasTotal + motor.utilidadDelDia + faltanteSobrante + Number(o.latin_debemos_ars || 0) + Number(o.debo_venezuela_ars || 0);
+    const diferencia = existencia - debemos;
+    const ok = Math.abs(diferencia) < 1;
+
+    const panelChequeo = UI.el('div', { class: 'panel', style: 'margin-bottom:16px;' }, [UI.el('h3', {}, '⚖️ Existencia vs Debemos')]);
+    const gridChequeo = UI.el('div', { class: 'cards-grid' });
+    [
+      ['Existencia', existencia, ''],
+      ['Debemos', debemos, ''],
+      ['Diferencia', diferencia, ok ? 'positivo' : 'negativo'],
+    ].forEach(([label, valor, clase]) => {
+      gridChequeo.appendChild(UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, label),
+        UI.el('div', { class: `value ${clase}` }, UI.formatoARS(valor)),
+      ]));
+    });
+    panelChequeo.appendChild(gridChequeo);
+    panelChequeo.appendChild(UI.el('div', {
+      style: `margin-top:10px; padding:10px 14px; border-radius:8px; font-size:13px; background:${ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'}; color:${ok ? 'var(--primary)' : 'var(--danger)'};`,
+    }, ok ? '✓ Cierra correctamente.' : '⚠ Hay una diferencia sin explicar.'));
+    cont.appendChild(panelChequeo);
+
+    // ---- Cierre diario (utilidad/gastos acumulados) ----
+    const r = resumen || {};
+    const panelCierre = UI.el('div', { class: 'panel' }, [UI.el('h3', {}, '📅 Cierre diario')]);
+    const gridCierre = UI.el('div', { class: 'cards-grid' });
+    [
+      ['Utilidad del día', r.utilidad_diaria_ars, 'positivo'],
+      ['Gastos del día', r.gastos_dia_ars, 'negativo'],
+      ['Utilidad acumulada', r.utilidad_acumulada_ars, 'positivo'],
+      ['Gastos acumulado', r.gastos_acumulado_ars, 'negativo'],
+      ['TOTAL', r.total_ars, (r.total_ars || 0) >= 0 ? 'positivo' : 'negativo'],
+    ].forEach(([label, valor, clase]) => {
+      gridCierre.appendChild(UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, label),
+        UI.el('div', { class: `value ${clase}` }, UI.formatoARS(valor || 0)),
+      ]));
+    });
+    panelCierre.appendChild(gridCierre);
+    if (!resumen) {
+      panelCierre.appendChild(UI.el('div', { class: 'empty-state', style: 'margin-top:10px;' }, 'Este día todavía no tiene un Cierre diario guardado.'));
+    }
+    cont.appendChild(panelCierre);
+  } catch (err) {
+    cont.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+  }
 }

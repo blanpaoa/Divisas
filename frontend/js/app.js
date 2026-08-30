@@ -1,5 +1,6 @@
 const RUTAS = {
   dashboard: vistaDashboard,
+  'cierre-completo': vistaCierreCompleto,
   tenencias: vistaTenencias,
   operaciones: vistaOperaciones,
   tasas: vistaTasas,
