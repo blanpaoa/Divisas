@@ -971,7 +971,7 @@ async function vistaResumenDiario(contenedor) {
         <div><label>Ajuste manual — otras entradas de pesos (ARS)</label><input type="number" step="any" id="rd-otras-entradas" value="0" /></div>
         <div><label>Latin Express — les debemos (ARS)</label><input type="number" step="any" id="rd-latin" value="0" /></div>
         <div><label>MoneyGram — nos deben (ARS)</label><input type="number" step="any" id="rd-moneygram" value="0" /></div>
-        <div><label>Debo a Venezuela (ARS)</label><input type="number" step="any" id="rd-venezuela" value="0" /></div>
+        <div><label>Debo a Venezuela (ARS) — sugerido, editable</label><input type="number" step="any" id="rd-venezuela" value="0" /></div>
         <div class="form-row-full"><button type="button" class="btn-secondary" id="rd-guardar-otros">Guardar otros saldos</button></div>
       </div>
     </div>
@@ -1022,6 +1022,16 @@ async function calcularCierreDelDia() {
     const ajustesExistencia = ajustesHoy.filter((a) => a.afecta === 'existencia').reduce((s, a) => s + Number(a.monto || 0), 0);
     const ajustesDebemos = ajustesHoy.filter((a) => a.afecta === 'debemos').reduce((s, a) => s + Number(a.monto || 0), 0);
 
+    // Debo a Venezuela = CTA BBVA Venezuela (Salidas) - Abonos Cuenta Trans Venezuela (Entradas)
+    // formula confirmada directamente en la barra de formulas de la planilla real (=E36-K10)
+    const bbvaVenezuela = salidasHoy
+      .filter((s) => (s.concepto || '').toUpperCase().includes('BBVA'))
+      .reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const abonosVenezuela = entradasHoy
+      .filter((e) => (e.concepto || '').toUpperCase().includes('ABONO') && (e.concepto || '').toUpperCase().includes('VENEZUELA'))
+      .reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const deboVenezuelaSugerido = bbvaVenezuela - abonosVenezuela;
+
     const utilidadDia = motor.fechaCalculada === fecha ? motor.utilidadDelDia : 0;
     const existenciaTenencias = Object.values(motor.monedas).reduce(
       (s, p) => s + p.cantidad * p.costo_promedio, 0
@@ -1032,6 +1042,7 @@ async function calcularCierreDelDia() {
     const gastosDia = resumenGuardado ? Number(resumenGuardado.gastos_dia_ars || 0) : gastosTotalCalculado;
 
     const otros = otrosGuardados || { latin_debemos_ars: 0, moneygram_nos_debe_ars: 0, debo_venezuela_ars: 0 };
+    const otrosGuardado_existe = !!otrosGuardados;
     const existencia = existenciaTenencias + salidaTotal + Number(otros.moneygram_nos_debe_ars || 0) + ajustesExistencia;
 
     // anterior = ultimo registro guardado antes de esta fecha
@@ -1111,7 +1122,7 @@ async function calcularCierreDelDia() {
     document.getElementById('rd-reset-faltante').checked = resetFaltante;
     document.getElementById('rd-latin').value = otros.latin_debemos_ars || 0;
     document.getElementById('rd-moneygram').value = otros.moneygram_nos_debe_ars || 0;
-    document.getElementById('rd-venezuela').value = otros.debo_venezuela_ars || 0;
+    document.getElementById('rd-venezuela').value = otrosGuardado_existe ? otros.debo_venezuela_ars : deboVenezuelaSugerido;
     document.getElementById('rd-otras-salidas').value = otros.otras_salidas_pesos_ars || 0;
     document.getElementById('rd-otras-entradas').value = otros.otras_entradas_pesos_ars || 0;
   } catch (err) {
@@ -2030,6 +2041,107 @@ async function cargarCierreCompleto() {
       style: `margin-top:10px; padding:10px 14px; border-radius:8px; font-size:13px; background:${okFinal ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'}; color:${okFinal ? 'var(--primary)' : 'var(--danger)'};`,
     }, okFinal ? '✓ Los dos calculos coinciden (diferencia de redondeo normal).' : '⚠ Los dos calculos no coinciden — revisar la carga del día.'));
     cont.appendChild(panelAuto);
+  } catch (err) {
+    cont.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+  }
+}
+
+/* ======================================================================
+   RESUMEN VENEZUELA — junta en una sola pantalla todo lo relacionado a
+   Venezuela que hoy vive repartido en distintos modulos: Debo a
+   Venezuela (Otros saldos), movimientos con concepto BBVA/Venezuela en
+   Entradas y Salidas, Cierres Venezuela (USD), y ajustes libres
+   relacionados. Es de solo lectura -- para cargar cada cosa se usa su
+   pantalla propia.
+   ====================================================================== */
+async function vistaResumenVenezuela(contenedor) {
+  await Estado.cargarMonedas();
+  contenedor.innerHTML = `
+    <header class="page-header">
+      <h1>🇻🇪 Resumen Venezuela</h1>
+      <div class="filters-bar">
+        <div><label>Desde</label><input type="date" id="rv-desde" value="${UI.haceDias(30)}" /></div>
+        <div><label>Hasta</label><input type="date" id="rv-hasta" value="${UI.hoy()}" /></div>
+        <button class="btn-secondary" id="rv-ver">Ver</button>
+      </div>
+    </header>
+    <p style="color:var(--text-muted); font-size:13px; margin-top:-10px;">
+      Junta todo lo relacionado a Venezuela que hoy vive repartido en distintos módulos. Es
+      de solo lectura — para cargar algo puntual se sigue usando Otros saldos, Entradas,
+      Salidas, Cierres Venezuela o Ajustes libres.
+    </p>
+    <div id="rv-contenido"><div class="empty-state">Cargando...</div></div>
+  `;
+  document.getElementById('rv-ver').addEventListener('click', cargarResumenVenezuela);
+  await cargarResumenVenezuela();
+}
+
+function contieneVenezuela(texto) {
+  const t = (texto || '').toUpperCase();
+  return t.includes('VENEZUELA') || t.includes('VZLA') || t.includes('BBVA') || t.includes('HAROLD');
+}
+
+async function cargarResumenVenezuela() {
+  const desde = document.getElementById('rv-desde').value;
+  const hasta = document.getElementById('rv-hasta').value;
+  const cont = document.getElementById('rv-contenido');
+  cont.innerHTML = '<div class="empty-state">Cargando...</div>';
+
+  try {
+    const [entradas, salidas, cierresVzla, ajustes, otrosSaldos] = await Promise.all([
+      Api.get('/entradas', { desde, hasta }),
+      Api.get('/salidas', { desde, hasta }),
+      Api.get('/cierres-venezuela', { desde, hasta }),
+      Api.get('/ajustes-libres', { desde, hasta }),
+      Api.get('/otros-saldos', { desde, hasta }),
+    ]);
+
+    cont.innerHTML = '';
+
+    // ---- Debo a Venezuela: evolucion en el periodo ----
+    const conDeuda = otrosSaldos.filter((o) => o.debo_venezuela_ars !== undefined);
+    const ultimoDebo = conDeuda.length ? conDeuda[0] : null; // ya viene ordenado desc por fecha
+    const panelDebo = UI.el('div', { class: 'panel', style: 'margin-bottom:16px;' }, [UI.el('h3', {}, '💰 Debo a Venezuela')]);
+    panelDebo.appendChild(UI.el('div', { class: 'cards-grid' }, [
+      UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, ultimoDebo ? `Último valor cargado (${ultimoDebo.fecha})` : 'Sin datos en el período'),
+        UI.el('div', { class: 'value' }, UI.formatoARS(ultimoDebo ? ultimoDebo.debo_venezuela_ars : 0)),
+      ]),
+    ]));
+    cont.appendChild(panelDebo);
+
+    // ---- Movimientos con concepto Venezuela/BBVA/Harold en Entradas y Salidas ----
+    const entradasVzla = entradas.filter((e) => contieneVenezuela(e.concepto));
+    const salidasVzla = salidas.filter((s) => contieneVenezuela(s.concepto));
+
+    cont.appendChild(panelTabla('⬇️ Entradas relacionadas (concepto con Venezuela/BBVA/Harold)', [
+      { key: 'fecha', label: 'Fecha' }, { key: 'concepto', label: 'Concepto' },
+      { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], entradasVzla, 'total_ars'));
+
+    cont.appendChild(panelTabla('⬆️ Salidas relacionadas (concepto con Venezuela/BBVA/Harold)', [
+      { key: 'fecha', label: 'Fecha' }, { key: 'concepto', label: 'Concepto' },
+      { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], salidasVzla, 'total_ars'));
+
+    // ---- Cierres Venezuela (USD) ----
+    cont.appendChild(panelTabla('🇻🇪 Cierres Venezuela (USD) — solo informativo', [
+      { key: 'fecha', label: 'Fecha' }, { key: 'tipo', label: 'Tipo' },
+      { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'cantidad', label: 'Cantidad', render: (f) => UI.formatoNumero(f.cantidad) },
+      { key: 'concepto', label: 'Concepto' },
+    ], cierresVzla, null));
+
+    // ---- Ajustes libres relacionados ----
+    const ajustesVzla = ajustes.filter((a) => contieneVenezuela(a.categoria) || contieneVenezuela(a.concepto));
+    cont.appendChild(panelTabla('🧩 Ajustes libres relacionados', [
+      { key: 'fecha', label: 'Fecha' }, { key: 'categoria', label: 'Categoría' },
+      { key: 'concepto', label: 'Concepto' },
+      { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
+      { key: 'afecta', label: 'Afecta a' },
+    ], ajustesVzla, 'monto'));
   } catch (err) {
     cont.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
   }

@@ -12,6 +12,7 @@ const RUTAS = {
   'ajustes-libres': vistaAjustesLibres,
   'depositos-bancarios': vistaDepositosBancarios,
   'cierres-venezuela': vistaCierresVenezuela,
+  'resumen-venezuela': vistaResumenVenezuela,
   prestamos: vistaPrestamos,
   'resumen-diario': vistaResumenDiario,
   'utilidad-mensual': vistaUtilidadMensual,
