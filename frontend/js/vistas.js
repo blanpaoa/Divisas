@@ -648,8 +648,8 @@ const vistaMovimientosPesos = crearVistaCrud({
       { value: 'salida', label: 'Salida' },
       { value: 'entrada', label: 'Entrada' },
     ] },
-    { key: 'concepto', label: 'Concepto / observacion', type: 'text', default: () => '', sugerencias: [
-      'Pagos a Latin Express-Moneygram', 'Efectivo', 'Ingresos a cuentas Lili',
+    { key: 'concepto', label: 'Concepto / observacion (los codigos "m 12345678" o "L 419CB-1234" alimentan el calculo de Latin/Moneygram)', type: 'text', default: () => '', sugerencias: [
+      'Pagos a Latin Express-Moneygram', 'Abono Latin', 'Efectivo', 'Ingresos a cuentas Lili',
       'Abono cuentas BBVA Lili', 'Descuadres/pendientes',
     ] },
     { key: 'monto', label: 'Monto (ARS)', type: 'number', default: () => 0 },
@@ -969,8 +969,8 @@ async function vistaResumenDiario(contenedor) {
       <div class="form-grid">
         <div><label>Ajuste manual — otras salidas de pesos (ARS)</label><input type="number" step="any" id="rd-otras-salidas" value="0" /></div>
         <div><label>Ajuste manual — otras entradas de pesos (ARS)</label><input type="number" step="any" id="rd-otras-entradas" value="0" /></div>
-        <div><label>Latin Express — les debemos (ARS)</label><input type="number" step="any" id="rd-latin" value="0" /></div>
-        <div><label>MoneyGram — nos deben (ARS)</label><input type="number" step="any" id="rd-moneygram" value="0" /></div>
+        <div><label>Latin Express — les debemos (ARS) — sugerido, editable</label><input type="number" step="any" id="rd-latin" value="0" /></div>
+        <div><label>MoneyGram — nos deben (ARS) — sugerido, editable</label><input type="number" step="any" id="rd-moneygram" value="0" /></div>
         <div><label>Debo a Venezuela (ARS) — sugerido, editable</label><input type="number" step="any" id="rd-venezuela" value="0" /></div>
         <div class="form-row-full"><button type="button" class="btn-secondary" id="rd-guardar-otros">Guardar otros saldos</button></div>
       </div>
@@ -1007,7 +1007,7 @@ async function calcularCierreDelDia() {
   chequeoWrap.innerHTML = '';
 
   try {
-    const [motor, entradasHoy, salidasHoy, gastosHoy, resumenGuardado, otrosGuardados, historialAnterior, ajustesHoy] =
+    const [motor, entradasHoy, salidasHoy, gastosHoy, resumenGuardado, otrosGuardados, historialAnterior, ajustesHoy, movPesosHoy, historialOtrosAnterior] =
       await Promise.all([
         Api.get('/motor/posiciones', { hasta: fecha }),
         Api.get('/entradas', { desde: fecha, hasta: fecha }),
@@ -1017,6 +1017,8 @@ async function calcularCierreDelDia() {
         Api.get(`/otros-saldos/${fecha}`),
         Api.get('/resumen-diario', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
         Api.get('/ajustes-libres', { desde: fecha, hasta: fecha }),
+        Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
+        Api.get('/otros-saldos', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
       ]);
 
     const ajustesExistencia = ajustesHoy.filter((a) => a.afecta === 'existencia').reduce((s, a) => s + Number(a.monto || 0), 0);
@@ -1031,6 +1033,27 @@ async function calcularCierreDelDia() {
       .filter((e) => (e.concepto || '').toUpperCase().includes('ABONO') && (e.concepto || '').toUpperCase().includes('VENEZUELA'))
       .reduce((s, r) => s + Number(r.total_ars || 0), 0);
     const deboVenezuelaSugerido = bbvaVenezuela - abonosVenezuela;
+
+    // MoneyGram / Latin: formula del usuario, confirmada exacta contra 6 dias reales:
+    //   MoneyGram(hoy) = MoneyGram(ayer) + suma "codigos m/M/L" en Movimientos de pesos SALIDA
+    //                    - suma "ABONO LATIN" en Movimientos de pesos ENTRADA
+    //   Latin(hoy)      = Latin(ayer) + suma "codigos m/M/L" en Movimientos de pesos ENTRADA
+    const esCodigoM = (s) => /^[mMlL]\s?[\w-]+$/.test((s || '').trim()) && /\d/.test(s || '');
+    const salidaMHoy = movPesosHoy
+      .filter((m) => m.tipo === 'salida' && esCodigoM(m.concepto))
+      .reduce((s, m) => s + Number(m.monto || 0), 0);
+    const entradaMHoy = movPesosHoy
+      .filter((m) => m.tipo === 'entrada' && esCodigoM(m.concepto))
+      .reduce((s, m) => s + Number(m.monto || 0), 0);
+    const abonoLatinHoy = movPesosHoy
+      .filter((m) => m.tipo === 'entrada' && (m.concepto || '').toUpperCase().includes('ABONO') && (m.concepto || '').toUpperCase().includes('LATIN'))
+      .reduce((s, m) => s + Number(m.monto || 0), 0);
+
+    const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
+    const moneygramAyer = otrosAnterior ? Number(otrosAnterior.moneygram_nos_debe_ars || 0) : 0;
+    const latinAyer = otrosAnterior ? Number(otrosAnterior.latin_debemos_ars || 0) : 0;
+    const moneygramSugerido = moneygramAyer + salidaMHoy - abonoLatinHoy;
+    const latinSugerido = latinAyer + entradaMHoy;
 
     const utilidadDia = motor.fechaCalculada === fecha ? motor.utilidadDelDia : 0;
     const existenciaTenencias = Object.values(motor.monedas).reduce(
@@ -1120,8 +1143,8 @@ async function calcularCierreDelDia() {
     document.getElementById('rd-reset-gastos').checked = resetGastos;
     document.getElementById('rd-reset-cadivi').checked = resetCadivi;
     document.getElementById('rd-reset-faltante').checked = resetFaltante;
-    document.getElementById('rd-latin').value = otros.latin_debemos_ars || 0;
-    document.getElementById('rd-moneygram').value = otros.moneygram_nos_debe_ars || 0;
+    document.getElementById('rd-latin').value = otrosGuardado_existe ? otros.latin_debemos_ars : latinSugerido;
+    document.getElementById('rd-moneygram').value = otrosGuardado_existe ? otros.moneygram_nos_debe_ars : moneygramSugerido;
     document.getElementById('rd-venezuela').value = otrosGuardado_existe ? otros.debo_venezuela_ars : deboVenezuelaSugerido;
     document.getElementById('rd-otras-salidas').value = otros.otras_salidas_pesos_ars || 0;
     document.getElementById('rd-otras-entradas').value = otros.otras_entradas_pesos_ars || 0;
