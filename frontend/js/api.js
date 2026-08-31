@@ -43,6 +43,21 @@ const Api = {
     return supabaseClient.auth.signOut();
   },
 
+  // Recibe una tabla tipo "estado que se arrastra" (Entradas/Salidas) y
+  // devuelve, para cada concepto distinto, el ultimo registro con
+  // fecha <= fechaHasta. Asi los valores quedan "vigentes" dia tras dia
+  // hasta que se cargue un cambio nuevo -- igual que en la planilla real
+  // (CAPITAL-PERDIDAS, ULTIMA UTILI, etc se repiten solas sin recargarlas).
+  async estadoActual(endpoint, fechaHasta) {
+    const todas = await this.get(endpoint, { desde: '2000-01-01', hasta: fechaHasta });
+    const porConcepto = {};
+    for (let i = todas.length - 1; i >= 0; i--) {
+      const f = todas[i];
+      porConcepto[f.concepto] = f;
+    }
+    return Object.values(porConcepto).sort((a, b) => (a.concepto > b.concepto ? 1 : -1));
+  },
+
   // Recupera el perfil (rol, nombre) del usuario actualmente logueado en Supabase Auth
   async cargarPerfilActual() {
     const { data: sesionData } = await supabaseClient.auth.getSession();
