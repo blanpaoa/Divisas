@@ -211,18 +211,6 @@ function crearVistaCrud(cfg) {
         </p>` : ''}
         <form id="form-crud" class="form-grid"></form>
       </div>` : ''}
-      ${puedeEscribir && cfg.esEstadoQueArrastra ? `
-      <div class="panel" style="margin-bottom:20px;">
-        <h3>Resetear a fin de mes (u otro corte)</h3>
-        <p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">
-          Pone en 0 todos los conceptos vigentes a partir de la fecha que elijas — para arrancar
-          limpio en un corte de mes, por ejemplo.
-        </p>
-        <div class="filters-bar">
-          <div><label>Resetear a partir del</label><input type="date" id="reset-fecha" value="${UI.hoy()}" /></div>
-          <button class="btn-danger" id="reset-btn">Resetear todos a 0</button>
-        </div>
-      </div>` : ''}
       <div class="panel">
         <h3>${cfg.esEstadoQueArrastra ? 'Estado vigente' : 'Filtros'}</h3>
         ${cfg.esEstadoQueArrastra ? `
@@ -250,31 +238,6 @@ function crearVistaCrud(cfg) {
         <div id="historial-wrap"></div>
       </div>` : ''}
     `;
-
-    if (puedeEscribir && cfg.esEstadoQueArrastra) {
-      document.getElementById('reset-btn').addEventListener('click', async () => {
-        const fechaReset = document.getElementById('reset-fecha').value;
-        if (!confirm(`¿Poner en 0 todos los conceptos vigentes a partir del ${fechaReset}? Esto no borra el historial, solo agrega un registro nuevo en 0 para cada concepto.`)) return;
-        try {
-          const actuales = await Api.estadoActual(cfg.endpoint, diaAnterior(fechaReset));
-          for (const r of actuales) {
-            if (Number(r.total_ars) === 0) continue;
-            const body = {};
-            cfg.campos.forEach((c) => {
-              if (c.key === 'fecha') body.fecha = fechaReset;
-              else if (c.type === 'number') body[c.key] = 0;
-              else body[c.key] = r[c.key];
-            });
-            if (cfg.calcularTotal) Object.assign(body, cfg.calcularTotal(body));
-            await Api.post(cfg.endpoint, body);
-          }
-          UI.toast(`Reseteados ${actuales.length} conceptos a partir del ${fechaReset}.`);
-          cargarTablaCrud(cfg, puedeEscribir);
-        } catch (err) {
-          UI.toast(err.message, 'error');
-        }
-      });
-    }
 
     if (puedeEscribir) {
       const form = document.getElementById('form-crud');
@@ -1136,16 +1099,6 @@ async function calcularCierreDelDia() {
     const ajustesExistencia = ajustesHoy.filter((a) => a.afecta === 'existencia').reduce((s, a) => s + Number(a.monto || 0), 0);
     const ajustesDebemos = ajustesHoy.filter((a) => a.afecta === 'debemos').reduce((s, a) => s + Number(a.monto || 0), 0);
 
-    // Debo a Venezuela = CTA (salida) - CTA (entrada), ambas del concepto fijo "CTA" en
-    // Movimientos de pesos (antes buscaba "BBVA"/"ABONO"+"VENEZUELA" en Entradas/Salidas)
-    const bbvaVenezuela = movPesosHoy
-      .filter((m) => m.tipo === 'salida' && m.concepto === 'CTA')
-      .reduce((s, m) => s + Number(m.monto || 0), 0);
-    const abonosVenezuela = movPesosHoy
-      .filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA')
-      .reduce((s, m) => s + Number(m.monto || 0), 0);
-    const deboVenezuelaSugerido = bbvaVenezuela - abonosVenezuela;
-
     // MoneyGram / Latin: formula del usuario, confirmada exacta contra 6 dias reales,
     // ahora usando los conceptos fijos MONEY / LATIN en vez de patrones de texto:
     //   MoneyGram(hoy) = MoneyGram(ayer) + suma concepto MONEY en Movimientos de pesos SALIDA
@@ -1161,11 +1114,23 @@ async function calcularCierreDelDia() {
       .filter((m) => m.tipo === 'entrada' && m.concepto === 'LATIN')
       .reduce((s, m) => s + Number(m.monto || 0), 0);
 
+    // Debo a Venezuela = CTA (salida) - CTA (entrada), pero ENCADENADO desde ayer
+    // (igual que Cadivi/Faltante/Utilidad Venezuela) -- antes solo miraba el dia
+    // de hoy y perdia todo lo acumulado, eso ya esta corregido.
+    const bbvaVenezuelaHoy = movPesosHoy
+      .filter((m) => m.tipo === 'salida' && m.concepto === 'CTA')
+      .reduce((s, m) => s + Number(m.monto || 0), 0);
+    const abonosVenezuelaHoy = movPesosHoy
+      .filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA')
+      .reduce((s, m) => s + Number(m.monto || 0), 0);
+
     const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
     const moneygramAyer = otrosAnterior ? Number(otrosAnterior.moneygram_nos_debe_ars || 0) : 0;
     const latinAyer = otrosAnterior ? Number(otrosAnterior.latin_debemos_ars || 0) : 0;
+    const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
     const moneygramSugerido = moneygramAyer + salidaMHoy - abonoLatinHoy;
     const latinSugerido = latinAyer + entradaMHoy;
+    const deboVenezuelaSugerido = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
 
     const utilidadDia = motor.fechaCalculada === fecha ? motor.utilidadDelDia : 0;
     const existenciaTenencias = Object.values(motor.monedas).reduce(
@@ -1719,14 +1684,18 @@ async function vistaPrestamos(contenedor) {
   document.getElementById('form-prestamo').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await Api.post('/prestamos', {
-        tipo: document.getElementById('pr-tipo').value,
-        persona: document.getElementById('pr-persona').value,
-        moneda_id: Number(selectMoneda.value),
-        monto_original: Number(document.getElementById('pr-monto').value) || 0,
-        fecha: document.getElementById('pr-fecha').value,
-        concepto: document.getElementById('pr-concepto').value,
+      const tipo = document.getElementById('pr-tipo').value;
+      const persona = document.getElementById('pr-persona').value;
+      const monedaId = Number(selectMoneda.value);
+      const montoOriginal = Number(document.getElementById('pr-monto').value) || 0;
+      const fecha = document.getElementById('pr-fecha').value;
+      const concepto = document.getElementById('pr-concepto').value;
+
+      const { id } = await Api.post('/prestamos', {
+        tipo, persona, moneda_id: monedaId, monto_original: montoOriginal, fecha, concepto,
       });
+      await sincronizarPrestamoConEntradaSalida({ id, tipo, persona, concepto, moneda_id: monedaId, fecha }, montoOriginal);
+
       UI.toast('Prestamo guardado.');
       document.getElementById('form-prestamo').reset();
       document.getElementById('pr-fecha').value = UI.hoy();
@@ -1738,6 +1707,34 @@ async function vistaPrestamos(contenedor) {
 
   document.getElementById('f-aplicar').addEventListener('click', cargarPrestamos);
   await cargarPrestamos();
+}
+
+// Crea/actualiza el renglon vigente en Entradas (si tipo='debemos') o Salidas
+// (si tipo='nos_deben') con el saldo pendiente actual del prestamo. El concepto
+// incluye el ID del prestamo para que cada uno tenga su propio renglon, sin
+// mezclarse con otros prestamos de la misma persona.
+async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente) {
+  const endpoint = prestamo.tipo === 'nos_deben' ? '/salidas' : '/entradas';
+  const conceptoBase = prestamo.concepto ? prestamo.concepto : 'Prestamo';
+  const concepto = `${prestamo.persona} - ${conceptoBase} #${prestamo.id}`;
+  const moneda = Estado.monedas.find((m) => m.id === Number(prestamo.moneda_id));
+  const esPesos = moneda && moneda.codigo === 'ARS';
+
+  let porcentaje = 0; // en pesos, "porcentaje" suma 0 -> total_ars = valor
+  if (!esPesos) {
+    // en moneda extranjera, "porcentaje" es la cotizacion que multiplica -- buscamos
+    // la tasa del dia mas reciente para que el total_ars sea razonable
+    try {
+      const tasa = await Api.buscarTasaMasReciente(UI.hoy(), prestamo.moneda_id);
+      porcentaje = tasa || 1;
+    } catch (err) {
+      porcentaje = 1;
+    }
+  }
+
+  const body = { fecha: UI.hoy(), concepto, moneda_id: prestamo.moneda_id, valor: saldoPendiente, porcentaje };
+  Object.assign(body, calcularTotalEntradaSalidaGasto(body));
+  await Api.post(endpoint, body);
 }
 
 async function cargarPrestamos() {
@@ -1839,11 +1836,14 @@ function mostrarFormularioPago(prestamo) {
           class: 'btn-primary',
           onclick: async () => {
             try {
+              const montoPago = Number(document.getElementById(idMonto).value) || 0;
               await Api.post('/pagos-prestamos', {
                 prestamo_id: prestamo.id,
-                monto: Number(document.getElementById(idMonto).value) || 0,
+                monto: montoPago,
                 fecha: document.getElementById(idFecha).value,
               });
+              const nuevoSaldo = Math.max(0, prestamo.saldo_pendiente - montoPago);
+              await sincronizarPrestamoConEntradaSalida(prestamo, nuevoSaldo);
               UI.toast('Pago registrado.');
               cargarPrestamos();
             } catch (err) {
@@ -1985,18 +1985,33 @@ async function vistaCierreCompleto(contenedor) {
   await cargarCierreCompleto();
 }
 
-function panelTabla(titulo, columnas, filas, totalKey) {
+function panelTabla(titulo, columnas, filas, totalKey, endpointEliminar) {
   const panel = UI.el('div', { class: 'panel', style: 'margin-bottom:16px;' }, [UI.el('h3', {}, titulo)]);
   if (filas.length === 0) {
     panel.appendChild(UI.el('div', { class: 'empty-state' }, 'Sin registros.'));
     return panel;
   }
-  const table = UI.el('table', {}, [
-    UI.el('thead', {}, UI.el('tr', {}, columnas.map((c) => UI.el('th', {}, c.label)))),
-  ]);
+  const encabezados = columnas.map((c) => UI.el('th', {}, c.label));
+  if (endpointEliminar) encabezados.push(UI.el('th', {}, ''));
+  const table = UI.el('table', {}, [UI.el('thead', {}, UI.el('tr', {}, encabezados))]);
   const tbody = UI.el('tbody');
   filas.forEach((fila) => {
-    tbody.appendChild(UI.el('tr', {}, columnas.map((c) => UI.el('td', {}, c.render ? c.render(fila) : String(fila[c.key] ?? '')))));
+    const tds = columnas.map((c) => UI.el('td', {}, c.render ? c.render(fila) : String(fila[c.key] ?? '')));
+    if (endpointEliminar) {
+      tds.push(UI.el('td', { class: 'table-actions' }, UI.el('button', {
+        onclick: async () => {
+          if (!confirm('¿Eliminar este registro?')) return;
+          try {
+            await Api.delete(`${endpointEliminar}/${fila.id}`);
+            UI.toast('Registro eliminado.');
+            cargarCierreCompleto();
+          } catch (err) {
+            UI.toast(err.message, 'error');
+          }
+        },
+      }, '🗑️')));
+    }
+    tbody.appendChild(UI.el('tr', {}, tds));
   });
   if (totalKey) {
     const suma = filas.reduce((s, f) => s + (Number(f[totalKey]) || 0), 0);
@@ -2005,6 +2020,7 @@ function panelTabla(titulo, columnas, filas, totalKey) {
       if (c.key === totalKey) return UI.el('td', { style: 'font-weight:700;' }, UI.formatoARS(suma));
       return UI.el('td', {}, '');
     });
+    if (endpointEliminar) tds.push(UI.el('td', {}, ''));
     tbody.appendChild(UI.el('tr', { style: 'background:var(--bg-panel-light);' }, tds));
   }
   table.appendChild(tbody);
@@ -2043,6 +2059,7 @@ async function cargarCierreCompleto() {
     const otrosAnteriorCC = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
     const moneygramAyerCC = otrosAnteriorCC ? Number(otrosAnteriorCC.moneygram_nos_debe_ars || 0) : 0;
     const latinAyerCC = otrosAnteriorCC ? Number(otrosAnteriorCC.latin_debemos_ars || 0) : 0;
+    const deboVenezuelaAyerCC = otrosAnteriorCC ? Number(otrosAnteriorCC.debo_venezuela_ars || 0) : 0;
 
     const bbvaVenezuelaCC = movPesos.filter((m) => m.tipo === 'salida' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
     const abonosVenezuelaCC = movPesos.filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
@@ -2050,7 +2067,7 @@ async function cargarCierreCompleto() {
     const o = otros || {
       latin_debemos_ars: latinAyerCC + entradaMHoy,
       moneygram_nos_debe_ars: moneygramAyerCC + salidaMHoy - abonoLatinHoy,
-      debo_venezuela_ars: bbvaVenezuelaCC - abonosVenezuelaCC,
+      debo_venezuela_ars: deboVenezuelaAyerCC + bbvaVenezuelaCC - abonosVenezuelaCC,
     };
 
     // ---- Posicion actual (tenencias) ----
@@ -2074,18 +2091,20 @@ async function cargarCierreCompleto() {
       { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
     ], operaciones, 'total_ars'));
 
-    // ---- Entradas / Salidas / Gastos ----
-    cont.appendChild(panelTabla('⬇️ Entradas y préstamos', [
+    // ---- Entradas / Salidas (estado vigente a la fecha) ----
+    cont.appendChild(panelTabla('⬇️ Entradas y préstamos (estado vigente)', [
+      { key: 'fecha', label: 'Última actualización' },
       { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
       { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
       { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
-    ], entradas, 'total_ars'));
+    ], entradas, 'total_ars', '/entradas'));
 
-    cont.appendChild(panelTabla('⬆️ Salidas / préstamos', [
+    cont.appendChild(panelTabla('⬆️ Salidas / préstamos (estado vigente)', [
+      { key: 'fecha', label: 'Última actualización' },
       { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
       { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
       { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
-    ], salidas, 'total_ars'));
+    ], salidas, 'total_ars', '/salidas'));
 
     cont.appendChild(panelTabla('🧾 Gastos', [
       { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
