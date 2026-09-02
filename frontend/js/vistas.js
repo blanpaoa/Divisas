@@ -1978,7 +1978,7 @@ async function vistaCierreCompleto(contenedor) {
   await cargarCierreCompleto();
 }
 
-function panelTabla(titulo, columnas, filas, totalKey, endpointEliminar) {
+function panelTabla(titulo, columnas, filas, totalKey, endpointEliminar, fechaVista) {
   const panel = UI.el('div', { class: 'panel', style: 'margin-bottom:16px;' }, [UI.el('h3', {}, titulo)]);
   if (filas.length === 0) {
     panel.appendChild(UI.el('div', { class: 'empty-state' }, 'Sin registros.'));
@@ -1991,18 +1991,30 @@ function panelTabla(titulo, columnas, filas, totalKey, endpointEliminar) {
   filas.forEach((fila) => {
     const tds = columnas.map((c) => UI.el('td', {}, c.render ? c.render(fila) : String(fila[c.key] ?? '')));
     if (endpointEliminar) {
+      // "estado vigente": la fila que se ve puede ser un registro VIEJO que se
+      // esta arrastrando desde otra fecha (no necesariamente de hoy). Borrarlo
+      // directo lo haria desaparecer de TODOS los dias desde su fecha original
+      // en adelante. Por eso, en vez de eliminar, creamos un registro nuevo en 0
+      // fechado hoy -- asi el historial queda intacto y el concepto queda en 0
+      // desde esta fecha para adelante, sin destruir nada de atras.
+      const esDeOtroDia = fechaVista && fila.fecha !== fechaVista;
       tds.push(UI.el('td', { class: 'table-actions' }, UI.el('button', {
+        title: esDeOtroDia ? `Este registro es del ${fila.fecha}, se esta arrastrando. "Poner en 0" crea uno nuevo, no borra el original.` : '',
         onclick: async () => {
-          if (!confirm('¿Eliminar este registro?')) return;
+          const msg = esDeOtroDia
+            ? `Este registro es del ${fila.fecha} (se viene arrastrando). Para no perder el historial, esto va a crear un registro NUEVO en 0 fechado hoy (${fechaVista}), sin borrar el original. ¿Continuar?`
+            : '¿Poner este registro en 0? (crea un registro nuevo, no borra el historial)';
+          if (!confirm(msg)) return;
           try {
-            await Api.delete(`${endpointEliminar}/${fila.id}`);
-            UI.toast('Registro eliminado.');
+            const body = { fecha: fechaVista || UI.hoy(), concepto: fila.concepto, moneda_id: fila.moneda_id, valor: 0, porcentaje: 0, total_ars: 0 };
+            await Api.post(endpointEliminar, body);
+            UI.toast('Puesto en 0 desde esta fecha.');
             cargarCierreCompleto();
           } catch (err) {
             UI.toast(err.message, 'error');
           }
         },
-      }, '🗑️')));
+      }, '0️⃣')));
     }
     tbody.appendChild(UI.el('tr', {}, tds));
   });
@@ -2085,19 +2097,25 @@ async function cargarCierreCompleto() {
     ], operaciones, 'total_ars'));
 
     // ---- Entradas / Salidas (estado vigente a la fecha) ----
+    // Ocultamos los conceptos que estan en 0 (resueltos/saldados) para no
+    // llenar la vista de ruido -- no se borran, siguen intactos en el
+    // historial si se consulta una fecha anterior a cuando se pusieron en 0.
+    const entradasVisibles = entradas.filter((f) => Number(f.total_ars) !== 0 || Number(f.valor) !== 0);
+    const salidasVisibles = salidas.filter((f) => Number(f.total_ars) !== 0 || Number(f.valor) !== 0);
+
     cont.appendChild(panelTabla('⬇️ Entradas y préstamos (estado vigente)', [
       { key: 'fecha', label: 'Última actualización' },
       { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
       { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
       { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
-    ], entradas, 'total_ars', '/entradas'));
+    ], entradasVisibles, 'total_ars', '/entradas', fecha));
 
     cont.appendChild(panelTabla('⬆️ Salidas / préstamos (estado vigente)', [
       { key: 'fecha', label: 'Última actualización' },
       { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
       { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
       { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
-    ], salidas, 'total_ars', '/salidas'));
+    ], salidasVisibles, 'total_ars', '/salidas', fecha));
 
     cont.appendChild(panelTabla('🧾 Gastos', [
       { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
