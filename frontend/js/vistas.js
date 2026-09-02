@@ -706,39 +706,50 @@ const vistaGastos = crearVistaCrud({
 // una fecha, y lo refleja en Salidas como "CTA BBVA Lili Venezuela". Se llama tanto
 // al guardar un movimiento CTA en Movimientos de pesos como al guardar Otros saldos
 // en Cierre diario, para que quede sincronizado sin pasos extra.
-async function sincronizarDeboVenezuela(fecha) {
-  const [movPesosHoy, historialOtrosAnterior] = await Promise.all([
+// Calcula dos cosas por separado (no son lo mismo, aunque parezcan parecidas):
+//  1) "CTA BBVA Lili Venezuela" en Salidas = BRUTO acumulado (ayer + lo que
+//     sale hoy hacia esa cuenta). Esto es lo que suma a Existencia, igual
+//     que en la planilla real.
+//  2) "Debo a Venezuela" = NETO (bruto salida - bruto entrada, encadenado
+//     dia a dia). Es solo informativo, en Otros saldos -- NO se mezcla
+//     dentro de la fila de Salidas.
+async function sincronizarCtaVenezuela(fecha) {
+  const [movPesosHoy, salidasAnteriores, historialOtrosAnterior] = await Promise.all([
     Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
+    Api.estadoActual('/salidas', diaAnterior(fecha)),
     Api.get('/otros-saldos', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
   ]);
   const bbvaVenezuelaHoy = movPesosHoy.filter((m) => m.tipo === 'salida' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
   const abonosVenezuelaHoy = movPesosHoy.filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
-  const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
-  const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
-  const deboVenezuela = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
+
+  // 1) Bruto -> Salidas
+  const ctaAnterior = salidasAnteriores.find((f) => f.concepto === 'CTA BBVA Lili Venezuela');
+  const ctaBrutoAcumulado = (ctaAnterior ? Number(ctaAnterior.total_ars || 0) : 0) + bbvaVenezuelaHoy;
 
   await Estado.cargarMonedas();
   await Api.post('/salidas', {
     fecha,
     concepto: 'CTA BBVA Lili Venezuela',
     moneda_id: (Estado.monedas.find((m) => m.codigo === 'ARS') || {}).id,
-    valor: deboVenezuela,
+    valor: ctaBrutoAcumulado,
     porcentaje: 0,
-    total_ars: deboVenezuela,
+    total_ars: ctaBrutoAcumulado,
   });
-  // Tambien actualizamos el saldo informativo en Otros saldos, para que la
-  // cadena (ayer + hoy) siga funcionando aunque el operador no pase por
-  // Cierre diario ese dia -- el upsert solo toca este campo, no resetea
-  // Latin/Moneygram/etc.
+
+  // 2) Neto -> Otros saldos (informativo, no toca Salidas)
+  const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
+  const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
+  const deboVenezuela = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
   await Api.put(`/otros-saldos/${fecha}`, { debo_venezuela_ars: deboVenezuela });
-  return deboVenezuela;
+
+  return { ctaBrutoAcumulado, deboVenezuela };
 }
 
 const vistaMovimientosPesos = crearVistaCrud({
   titulo: '💵 Movimientos de pesos',
   endpoint: '/movimientos-pesos',
   onGuardado: async (body) => {
-    if (body.concepto === 'CTA') await sincronizarDeboVenezuela(body.fecha);
+    if (body.concepto === 'CTA') await sincronizarCtaVenezuela(body.fecha);
   },
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
