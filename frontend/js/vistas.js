@@ -726,6 +726,11 @@ async function sincronizarDeboVenezuela(fecha) {
     porcentaje: 0,
     total_ars: deboVenezuela,
   });
+  // Tambien actualizamos el saldo informativo en Otros saldos, para que la
+  // cadena (ayer + hoy) siga funcionando aunque el operador no pase por
+  // Cierre diario ese dia -- el upsert solo toca este campo, no resetea
+  // Latin/Moneygram/etc.
+  await Api.put(`/otros-saldos/${fecha}`, { debo_venezuela_ars: deboVenezuela });
   return deboVenezuela;
 }
 
