@@ -270,6 +270,7 @@ function crearVistaCrud(cfg) {
         if (cfg.calcularTotal) Object.assign(body, cfg.calcularTotal(body));
         try {
           await Api.post(cfg.endpoint, body);
+          if (cfg.onGuardado) await cfg.onGuardado(body);
           UI.toast('Registro guardado correctamente.');
           form.reset();
           cfg.campos.forEach((c) => {
@@ -701,9 +702,39 @@ const vistaGastos = crearVistaCrud({
   ],
 });
 
+// Calcula "Debo a Venezuela" (ayer + CTA salida de hoy - CTA entrada de hoy) para
+// una fecha, y lo refleja en Salidas como "CTA BBVA Lili Venezuela". Se llama tanto
+// al guardar un movimiento CTA en Movimientos de pesos como al guardar Otros saldos
+// en Cierre diario, para que quede sincronizado sin pasos extra.
+async function sincronizarDeboVenezuela(fecha) {
+  const [movPesosHoy, historialOtrosAnterior] = await Promise.all([
+    Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
+    Api.get('/otros-saldos', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
+  ]);
+  const bbvaVenezuelaHoy = movPesosHoy.filter((m) => m.tipo === 'salida' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
+  const abonosVenezuelaHoy = movPesosHoy.filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
+  const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
+  const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
+  const deboVenezuela = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
+
+  await Estado.cargarMonedas();
+  await Api.post('/salidas', {
+    fecha,
+    concepto: 'CTA BBVA Lili Venezuela',
+    moneda_id: (Estado.monedas.find((m) => m.codigo === 'ARS') || {}).id,
+    valor: deboVenezuela,
+    porcentaje: 0,
+    total_ars: deboVenezuela,
+  });
+  return deboVenezuela;
+}
+
 const vistaMovimientosPesos = crearVistaCrud({
   titulo: '💵 Movimientos de pesos',
   endpoint: '/movimientos-pesos',
+  onGuardado: async (body) => {
+    if (body.concepto === 'CTA') await sincronizarDeboVenezuela(body.fecha);
+  },
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
     { key: 'tipo', label: 'Tipo', type: 'select', options: [
@@ -1308,7 +1339,7 @@ async function guardarOtrosSaldos() {
     // calculo de Existencia -- pedido explicito del usuario.
     await Api.post('/salidas', {
       fecha,
-      concepto: 'Debo a Venezuela (CTA)',
+      concepto: 'CTA BBVA Lili Venezuela',
       moneda_id: (Estado.monedas.find((m) => m.codigo === 'ARS') || {}).id,
       valor: deboVenezuela,
       porcentaje: 0,
