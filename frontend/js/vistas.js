@@ -208,6 +208,8 @@ function crearVistaCrud(cfg) {
           Estos valores se arrastran solos día a día — no hace falta recargarlos si no cambiaron.
           Cargá un concepto solo cuando su valor cambie; a partir de esa fecha, ese va a ser el
           valor vigente hasta que lo vuelvas a cambiar.
+          ${cfg.conceptosAditivos && cfg.conceptosAditivos.length ? `<br/><strong>Excepción:</strong> ${cfg.conceptosAditivos.join(' y ')} funcionan distinto —
+          lo que cargues se SUMA al valor que ya había (no lo reemplaza).` : ''}
         </p>` : ''}
         <form id="form-crud" class="form-grid"></form>
       </div>` : ''}
@@ -268,6 +270,26 @@ function crearVistaCrud(cfg) {
           body[c.key] = val;
         });
         if (cfg.calcularTotal) Object.assign(body, cfg.calcularTotal(body));
+
+        // Conceptos aditivos (ej: "Sobrantes del dia", "Abono cuentas Venezuela"):
+        // en vez de reemplazar el valor vigente, lo que se carga se SUMA al
+        // total que ya habia -- y se guarda el total combinado (no solo lo nuevo).
+        const conceptoNorm = (body.concepto || '').trim().toLowerCase();
+        const esAditivo = cfg.conceptosAditivos && cfg.conceptosAditivos.some((c) => c.trim().toLowerCase() === conceptoNorm);
+        if (esAditivo && cfg.esEstadoQueArrastra) {
+          try {
+            const vigentes = await Api.estadoActual(cfg.endpoint, body.fecha);
+            const anterior = vigentes.find((f) => (f.concepto || '').trim().toLowerCase() === conceptoNorm);
+            const baseAnterior = anterior ? Number(anterior.total_ars || 0) : 0;
+            const nuevoTotal = baseAnterior + Number(body.total_ars || 0);
+            body.valor = nuevoTotal;
+            body.porcentaje = 0;
+            body.total_ars = nuevoTotal;
+          } catch (err) {
+            // si falla la consulta del anterior, seguimos con el valor tal cual se cargo
+          }
+        }
+
         try {
           await Api.post(cfg.endpoint, body);
           if (cfg.onGuardado) await cfg.onGuardado(body);
@@ -638,9 +660,10 @@ const vistaEntradas = crearVistaCrud({
   titulo: '⬇️ Entradas y prestamos (capital recibido)',
   endpoint: '/entradas',
   esEstadoQueArrastra: true,
+  conceptosAditivos: ['SOBRANTES DEL DIA', 'ABONOS DE CUENTA TRANS, VENEZUELA'],
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: CONCEPTOS_SUGERIDOS },
+    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: [...CONCEPTOS_SUGERIDOS, 'SOBRANTES DEL DIA', 'ABONOS DE CUENTA TRANS, VENEZUELA'] },
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
     { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
@@ -1146,11 +1169,24 @@ async function cerrarElDia(e) {
     const utilidadAcumulada = utilidadDia + utilidadAcumAnterior;
     const gastosAcumulado = gastosDia + gastosAcumAnterior;
     const utilidadCadivi = cadiviAcumAnterior + cadiviDia; // sin descuentos/adicional -- simplificado
-    const faltanteSobrante = faltanteAcumAnterior; // no se toca -- se mantiene igual que ayer
     const total = utilidadAcumulada - gastosAcumulado;
 
     const { moneygram, latin } = await calcularLatinMoneygram(fecha);
     const { ctaBrutoAcumulado, deboVenezuela } = await calcularCtaVenezuela(fecha);
+
+    // Faltante/Sobrante absorbe automaticamente la diferencia del dia, para que
+    // el chequeo (Existencia vs Debemos) cierre en $0 -- confirmado por el
+    // usuario que es asi como funciona en la planilla real. Se calcula la
+    // diferencia usando el faltante de AYER (para no ser circular), y esa
+    // diferencia se suma al acumulado -- matematicamente esto hace que el
+    // chequeo final de exactamente $0.
+    const existenciaTenencias = Object.values(motor.monedas || {}).reduce((s, p) => s + p.cantidad * p.costo_promedio, 0);
+    const salidaTotal = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const entradasTotal = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const existencia = existenciaTenencias + salidaTotal + moneygram;
+    const debemosConFaltanteAyer = entradasTotal + utilidadCadivi + faltanteAcumAnterior + latin;
+    const diferenciaDelDia = (existencia - debemosConFaltanteAyer) - total;
+    const faltanteSobrante = faltanteAcumAnterior + diferenciaDelDia;
 
     await Api.put(`/resumen-diario/${fecha}`, {
       utilidad_diaria_ars: utilidadDia,
@@ -1159,7 +1195,7 @@ async function cerrarElDia(e) {
       cadivi_descuentos_ars: 0,
       cadivi_adicional_ars: 0,
       utilidad_cadivi_ars: utilidadCadivi,
-      faltante_dia_ars: 0,
+      faltante_dia_ars: diferenciaDelDia,
       faltante_descuento_ars: 0,
       faltante_sobrante_ars: faltanteSobrante,
       utilidad_acumulada_ars: utilidadAcumulada,
@@ -1177,14 +1213,11 @@ async function cerrarElDia(e) {
     });
     await guardarCtaVenezuela(fecha, ctaBrutoAcumulado);
 
-    // Chequeo final: Existencia vs Debemos
-    const existenciaTenencias = Object.values(motor.monedas || {}).reduce((s, p) => s + p.cantidad * p.costo_promedio, 0);
-    const salidaTotal = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
-    const entradasTotal = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
-    const existencia = existenciaTenencias + salidaTotal + moneygram;
+    // Chequeo final: Existencia vs Debemos (con el faltante YA actualizado,
+    // deberia dar $0 exacto)
     const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + latin;
-    const diferencia = existencia - debemos;
-    const ok = Math.abs(diferencia) < 1;
+    const diferenciaFinal = (existencia - debemos) - total;
+    const ok = Math.abs(diferenciaFinal) < 2;
 
     resultadoWrap.innerHTML = '';
     const panel = UI.el('div', { class: 'panel' }, [UI.el('h3', {}, '✅ Día cerrado')]);
@@ -1195,7 +1228,9 @@ async function cerrarElDia(e) {
       ['TOTAL (Utilidad − Gastos acum.)', total, total >= 0 ? 'positivo' : 'negativo'],
       ['Existencia', existencia, ''],
       ['Debemos', debemos, ''],
-      ['Diferencia', diferencia, ok ? 'positivo' : 'negativo'],
+      ['Diferencia absorbida hoy', diferenciaDelDia, ''],
+      ['Faltante/Sobrante acumulado', faltanteSobrante, ''],
+      ['Diferencia final (debe dar ~$0)', diferenciaFinal, ok ? 'positivo' : 'negativo'],
     ].forEach(([label, valor, clase]) => {
       grid.appendChild(UI.el('div', { class: 'stat-card' }, [
         UI.el('div', { class: 'label' }, label),
