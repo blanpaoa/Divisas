@@ -354,7 +354,7 @@ const Api = {
 
   /* ===================== MOTOR DE COSTEO (WAC) ===================== */
   async _motorPosiciones({ hasta } = {}) {
-    const [aperturaRes, operacionesRes, otrosSaldosRes, movimientosPesosRes] = await Promise.all([
+    const [aperturaRes, operacionesRes, otrosSaldosRes, movimientosPesosRes, gastosRes, resumenRes] = await Promise.all([
       supabaseClient.from('apertura_saldos').select('moneda_id, cantidad, costo_promedio'),
       supabaseClient
         .from('operaciones_cambio')
@@ -368,11 +368,21 @@ const Api = {
         .from('movimientos_pesos')
         .select('fecha, tipo, monto')
         .order('fecha', { ascending: true }),
+      supabaseClient
+        .from('gastos')
+        .select('fecha, moneda_id, total_ars')
+        .order('fecha', { ascending: true }),
+      supabaseClient
+        .from('resumen_diario')
+        .select('fecha, cadivi_dia_ars')
+        .order('fecha', { ascending: true }),
     ]);
     if (aperturaRes.error) throw new Error(aperturaRes.error.message);
     if (operacionesRes.error) throw new Error(operacionesRes.error.message);
     if (otrosSaldosRes.error) throw new Error(otrosSaldosRes.error.message);
     if (movimientosPesosRes.error) throw new Error(movimientosPesosRes.error.message);
+    if (gastosRes.error) throw new Error(gastosRes.error.message);
+    if (resumenRes.error) throw new Error(resumenRes.error.message);
 
     // moneda_id viene como numero desde Supabase; el motor identifica monedas por codigo
     // para las divisas extranjeras, y por separado calcula el pozo de pesos (ARS).
@@ -392,10 +402,15 @@ const Api = {
     const fechasHasta = hasta ? fechas.filter((f) => f <= hasta) : fechas;
     const ultimaFecha = fechasHasta.length ? fechasHasta[fechasHasta.length - 1] : null;
 
-    // Saldo de pesos (formula validada contra la planilla real). Se combinan dos
-    // fuentes para "otras salidas/entradas": el numero cargado a mano en Otros
-    // saldos (usado para la carga historica) + la suma del log item por item de
-    // Movimientos de pesos (usado en el dia a dia, se suma solo).
+    // Saldo de pesos (formula validada contra la planilla real). Se combinan
+    // TODAS las fuentes que mueven pesos, para que cargar algo UNA sola vez
+    // (en Gastos, en Cierre diario, o en Movimientos de pesos) alcance --
+    // sin tener que repetir el mismo numero en varios lugares:
+    //  - Otros saldos (numero cargado a mano, usado para la carga historica)
+    //  - Movimientos de pesos (el log item por item del dia a dia)
+    //  - Gastos en ARS (salida automatica -- pagar un gasto es plata que sale)
+    //  - Utilidad Cadivi/Venezuela del dia (entrada automatica, confirmado
+    //    contra la planilla real que este monto tambien mueve el pozo)
     const otrosPorFecha = {};
     otrosSaldosRes.data.forEach((o) => {
       otrosPorFecha[o.fecha] = otrosPorFecha[o.fecha] || { otras_salidas: 0, otras_entradas: 0 };
@@ -406,6 +421,16 @@ const Api = {
       otrosPorFecha[m.fecha] = otrosPorFecha[m.fecha] || { otras_salidas: 0, otras_entradas: 0 };
       if (m.tipo === 'salida') otrosPorFecha[m.fecha].otras_salidas += Number(m.monto) || 0;
       else otrosPorFecha[m.fecha].otras_entradas += Number(m.monto) || 0;
+    });
+    gastosRes.data.forEach((g) => {
+      if (codigoPorId[g.moneda_id] !== 'ARS') return; // solo gastos en pesos mueven el pozo directo
+      otrosPorFecha[g.fecha] = otrosPorFecha[g.fecha] || { otras_salidas: 0, otras_entradas: 0 };
+      otrosPorFecha[g.fecha].otras_salidas += Number(g.total_ars) || 0;
+    });
+    resumenRes.data.forEach((r) => {
+      if (!r.cadivi_dia_ars) return;
+      otrosPorFecha[r.fecha] = otrosPorFecha[r.fecha] || { otras_salidas: 0, otras_entradas: 0 };
+      otrosPorFecha[r.fecha].otras_entradas += Number(r.cadivi_dia_ars) || 0;
     });
     const otrosPesosPorFecha = Object.entries(otrosPorFecha).map(([fecha, d]) => ({ fecha, ...d }));
     const saldoPesosPorFecha = window.MotorCosteo.calcularSaldoPesos(aperturaArs, operacionesRes.data, otrosPesosPorFecha);
