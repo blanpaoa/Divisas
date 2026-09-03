@@ -702,18 +702,13 @@ const vistaGastos = crearVistaCrud({
   ],
 });
 
-// Calcula "Debo a Venezuela" (ayer + CTA salida de hoy - CTA entrada de hoy) para
-// una fecha, y lo refleja en Salidas como "CTA BBVA Lili Venezuela". Se llama tanto
-// al guardar un movimiento CTA en Movimientos de pesos como al guardar Otros saldos
-// en Cierre diario, para que quede sincronizado sin pasos extra.
-// Calcula dos cosas por separado (no son lo mismo, aunque parezcan parecidas):
-//  1) "CTA BBVA Lili Venezuela" en Salidas = BRUTO acumulado (ayer + lo que
-//     sale hoy hacia esa cuenta). Esto es lo que suma a Existencia, igual
-//     que en la planilla real.
-//  2) "Debo a Venezuela" = NETO (bruto salida - bruto entrada, encadenado
-//     dia a dia). Es solo informativo, en Otros saldos -- NO se mezcla
-//     dentro de la fila de Salidas.
-async function sincronizarCtaVenezuela(fecha) {
+// Calcula (sin escribir nada en la base) el saldo BRUTO acumulado de "CTA BBVA
+// Lili Venezuela" y el NETO "Debo a Venezuela" para una fecha. Son dos cosas
+// distintas: el bruto es lo que suma a Existencia (via Salidas), el neto es
+// solo informativo. Funcion pura -- se puede llamar desde cualquier pantalla
+// sin riesgo de dejar datos a medias; quien la llama decide si guarda el
+// resultado o no.
+async function calcularCtaVenezuela(fecha) {
   const [movPesosHoy, salidasAnteriores, historialOtrosAnterior] = await Promise.all([
     Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
     Api.estadoActual('/salidas', diaAnterior(fecha)),
@@ -722,10 +717,20 @@ async function sincronizarCtaVenezuela(fecha) {
   const bbvaVenezuelaHoy = movPesosHoy.filter((m) => m.tipo === 'salida' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
   const abonosVenezuelaHoy = movPesosHoy.filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
 
-  // 1) Bruto -> Salidas
   const ctaAnterior = salidasAnteriores.find((f) => f.concepto === 'CTA BBVA Lili Venezuela');
   const ctaBrutoAcumulado = (ctaAnterior ? Number(ctaAnterior.total_ars || 0) : 0) + bbvaVenezuelaHoy;
 
+  const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
+  const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
+  const deboVenezuela = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
+
+  return { ctaBrutoAcumulado, deboVenezuela };
+}
+
+// Guarda lo que calculo() ya calculo: el bruto en Salidas, el neto en Otros
+// saldos. Se llama SOLO desde 'Guardar otros saldos' (Cierre diario) -- el
+// unico lugar que escribe, para que nunca queden datos a medias.
+async function guardarCtaVenezuela(fecha, ctaBrutoAcumulado) {
   await Estado.cargarMonedas();
   await Api.post('/salidas', {
     fecha,
@@ -735,22 +740,31 @@ async function sincronizarCtaVenezuela(fecha) {
     porcentaje: 0,
     total_ars: ctaBrutoAcumulado,
   });
+}
 
-  // 2) Neto -> Otros saldos (informativo, no toca Salidas)
+// MoneyGram / Latin: formula del usuario, confirmada exacta contra 6 dias
+// reales. Tambien pura -- solo calcula, no escribe.
+async function calcularLatinMoneygram(fecha) {
+  const [movPesosHoy, historialOtrosAnterior] = await Promise.all([
+    Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
+    Api.get('/otros-saldos', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
+  ]);
+  const salidaMHoy = movPesosHoy.filter((m) => m.tipo === 'salida' && m.concepto === 'MONEY').reduce((s, m) => s + Number(m.monto || 0), 0);
+  const entradaMHoy = movPesosHoy.filter((m) => m.tipo === 'entrada' && m.concepto === 'MONEY').reduce((s, m) => s + Number(m.monto || 0), 0);
+  const abonoLatinHoy = movPesosHoy.filter((m) => m.tipo === 'entrada' && m.concepto === 'LATIN').reduce((s, m) => s + Number(m.monto || 0), 0);
+
   const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
-  const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
-  const deboVenezuela = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
-  await Api.put(`/otros-saldos/${fecha}`, { debo_venezuela_ars: deboVenezuela });
+  const moneygramAyer = otrosAnterior ? Number(otrosAnterior.moneygram_nos_debe_ars || 0) : 0;
+  const latinAyer = otrosAnterior ? Number(otrosAnterior.latin_debemos_ars || 0) : 0;
+  const moneygram = moneygramAyer + salidaMHoy - abonoLatinHoy;
+  const latin = latinAyer + entradaMHoy;
 
-  return { ctaBrutoAcumulado, deboVenezuela };
+  return { moneygram, latin };
 }
 
 const vistaMovimientosPesos = crearVistaCrud({
   titulo: '💵 Movimientos de pesos',
   endpoint: '/movimientos-pesos',
-  onGuardado: async (body) => {
-    if (body.concepto === 'CTA') await sincronizarCtaVenezuela(body.fecha);
-  },
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
     { key: 'tipo', label: 'Tipo', type: 'select', options: [
@@ -1029,245 +1043,68 @@ async function vistaResumenDiario(contenedor) {
     <div class="panel" style="margin-bottom:20px;">
       <div class="filters-bar">
         <div><label>Fecha</label><input type="date" id="rd-fecha" value="${UI.hoy()}" /></div>
-        <button class="btn-secondary" id="rd-calcular">Calcular</button>
+        <button class="btn-secondary" id="rd-calcular">Ver</button>
       </div>
-
-      <div class="cards-grid" id="rd-cards"></div>
-
-      <div id="rd-chequeo" style="margin:16px 0;"></div>
-
+    </div>
+    <div id="rd-registros"></div>
+    <div class="panel" style="margin-bottom:20px;">
+      <h3>Cerrar el día</h3>
+      <p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">
+        Todo lo demás (utilidad de compra/venta, gastos, Latin, MoneyGram, Debo a Venezuela) se
+        calcula solo a partir de lo que ya cargaste en las otras pantallas. Completá esto y tocá
+        el botón.
+      </p>
       <form id="form-resumen" class="form-grid">
-        <div>
-          <label>Utilidad del dia (ARS) — calculada, editable si hace falta</label>
-          <input type="number" step="any" id="rd-utilidad" value="0" />
-        </div>
-        <div><label>Gastos del dia (ARS) — calculado, editable si hace falta</label><input type="number" step="any" id="rd-gastos-dia" value="0" /></div>
-        <div><label>Faltante / sobrante del día (ARS)</label><input type="number" step="any" id="rd-faltante-dia" value="0" /></div>
-        <div><label>Descuento faltante (ARS)</label><input type="number" step="any" id="rd-faltante-descuento" value="0" /></div>
-        <div>
-          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
-            <input type="checkbox" id="rd-reset-faltante" style="width:auto; margin:0;" /> Resetear faltante acumulado
-          </label>
-        </div>
-        <div><label>Utilidad Cadivi/Venezuela del día (ARS)</label><input type="number" step="any" id="rd-cadivi-dia" value="0" /></div>
-        <div><label>Descuentos Cadivi (ARS)</label><input type="number" step="any" id="rd-cadivi-descuentos" value="0" /></div>
-        <div><label>Utilidad adicional Cadivi (ARS)</label><input type="number" step="any" id="rd-cadivi-adicional" value="0" /></div>
-        <div>
-          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
-            <input type="checkbox" id="rd-reset-cadivi" style="width:auto; margin:0;" /> Resetear Cadivi/Venezuela acumulado
-          </label>
-        </div>
-        <div><label>Tasa US cierre (referencia)</label><input type="number" step="any" id="rd-tasa" value="0" /></div>
-        <div>
-          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
-            <input type="checkbox" id="rd-reset-utilidad" style="width:auto; margin:0;" /> Resetear utilidad acumulada
-          </label>
-        </div>
-        <div>
-          <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text);">
-            <input type="checkbox" id="rd-reset-gastos" style="width:auto; margin:0;" /> Resetear gastos acumulado
-          </label>
-        </div>
-        <div class="form-row-full"><label>Notas</label><input type="text" id="rd-notas" /></div>
-        <div class="form-row-full"><button type="submit" class="btn-primary">Guardar cierre del dia</button></div>
+        <div><label>Utilidad Venezuela del día (ARS)</label><input type="number" step="any" id="rd-cadivi-dia" value="0" /></div>
+        <div class="form-row-full"><button type="submit" class="btn-primary">Cerrar el día</button></div>
       </form>
     </div>
-
-    <div class="panel" style="margin-bottom:20px;">
-      <h3>Otros saldos y ajustes</h3>
-      <p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">
-        Las "otras salidas/entradas de pesos" del día a día se cargan solas desde
-        <strong>Movimientos de pesos</strong> (no hace falta tocar nada acá para eso). Los campos
-        de abajo son opcionales: un ajuste manual extra si hiciera falta, más Latin/Moneygram/Venezuela.
-      </p>
-      <div class="form-grid">
-        <div><label>Ajuste manual — otras salidas de pesos (ARS)</label><input type="number" step="any" id="rd-otras-salidas" value="0" /></div>
-        <div><label>Ajuste manual — otras entradas de pesos (ARS)</label><input type="number" step="any" id="rd-otras-entradas" value="0" /></div>
-        <div><label>Latin Express — les debemos (ARS) — sugerido, editable</label><input type="number" step="any" id="rd-latin" value="0" /></div>
-        <div><label>MoneyGram — nos deben (ARS) — sugerido, editable</label><input type="number" step="any" id="rd-moneygram" value="0" /></div>
-        <div><label>Debo a Venezuela (ARS) — sugerido, editable</label><input type="number" step="any" id="rd-venezuela" value="0" /></div>
-        <div class="form-row-full"><button type="button" class="btn-secondary" id="rd-guardar-otros">Guardar otros saldos</button></div>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h3>Historial</h3>
-      <div class="filters-bar">
-        <div><label>Desde</label><input type="date" id="f-desde" value="${UI.haceDias(60)}" /></div>
-        <div><label>Hasta</label><input type="date" id="f-hasta" value="${UI.hoy()}" /></div>
-        <button class="btn-secondary" id="f-aplicar">Filtrar</button>
-      </div>
-      <div id="tabla-wrap"></div>
-    </div>
+    <div id="rd-resultado"></div>
   `;
-
-  document.getElementById('rd-calcular').addEventListener('click', calcularCierreDelDia);
-  document.getElementById('form-resumen').addEventListener('submit', guardarCierreDelDia);
-  document.getElementById('rd-guardar-otros').addEventListener('click', guardarOtrosSaldos);
-  document.getElementById('f-aplicar').addEventListener('click', cargarHistorialResumen);
-
-  await calcularCierreDelDia();
-  await cargarHistorialResumen();
+  document.getElementById('rd-calcular').addEventListener('click', cargarRegistrosDelDia);
+  document.getElementById('form-resumen').addEventListener('submit', cerrarElDia);
+  await cargarRegistrosDelDia();
 }
 
-// Guarda en memoria el ultimo calculo, para no repetirlo al guardar
-let _ultimoCalculoCierre = null;
-
-async function calcularCierreDelDia() {
+// Muestra, de solo lectura, todo lo que ya se cargo para el dia en las
+// pantallas correspondientes (Compra/Venta, Entradas, Salidas, Gastos,
+// Movimientos de pesos) -- para editar cada cosa se usa su pantalla propia.
+async function cargarRegistrosDelDia() {
   const fecha = document.getElementById('rd-fecha').value;
-  const cardsWrap = document.getElementById('rd-cards');
-  const chequeoWrap = document.getElementById('rd-chequeo');
-  cardsWrap.innerHTML = '<div class="empty-state">Calculando...</div>';
-  chequeoWrap.innerHTML = '';
-
+  const wrap = document.getElementById('rd-registros');
+  wrap.innerHTML = '<div class="empty-state">Cargando...</div>';
   try {
-    const [motor, entradasHoy, salidasHoy, gastosHoy, resumenGuardado, otrosGuardados, historialAnterior, ajustesHoy, movPesosHoy, historialOtrosAnterior] =
-      await Promise.all([
-        Api.get('/motor/posiciones', { hasta: fecha }),
-        Api.estadoActual('/entradas', fecha),
-        Api.estadoActual('/salidas', fecha),
-        Api.get('/gastos', { desde: fecha, hasta: fecha }),
-        Api.get(`/resumen-diario/${fecha}`),
-        Api.get(`/otros-saldos/${fecha}`),
-        Api.get('/resumen-diario', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
-        Api.get('/ajustes-libres', { desde: fecha, hasta: fecha }),
-        Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
-        Api.get('/otros-saldos', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
-      ]);
-
-    const ajustesExistencia = ajustesHoy.filter((a) => a.afecta === 'existencia').reduce((s, a) => s + Number(a.monto || 0), 0);
-    const ajustesDebemos = ajustesHoy.filter((a) => a.afecta === 'debemos').reduce((s, a) => s + Number(a.monto || 0), 0);
-
-    // MoneyGram / Latin: formula del usuario, confirmada exacta contra 6 dias reales,
-    // ahora usando los conceptos fijos MONEY / LATIN en vez de patrones de texto:
-    //   MoneyGram(hoy) = MoneyGram(ayer) + suma concepto MONEY en Movimientos de pesos SALIDA
-    //                    - suma concepto LATIN en Movimientos de pesos ENTRADA
-    //   Latin(hoy)      = Latin(ayer) + suma concepto MONEY en Movimientos de pesos ENTRADA
-    const salidaMHoy = movPesosHoy
-      .filter((m) => m.tipo === 'salida' && m.concepto === 'MONEY')
-      .reduce((s, m) => s + Number(m.monto || 0), 0);
-    const entradaMHoy = movPesosHoy
-      .filter((m) => m.tipo === 'entrada' && m.concepto === 'MONEY')
-      .reduce((s, m) => s + Number(m.monto || 0), 0);
-    const abonoLatinHoy = movPesosHoy
-      .filter((m) => m.tipo === 'entrada' && m.concepto === 'LATIN')
-      .reduce((s, m) => s + Number(m.monto || 0), 0);
-
-    // Debo a Venezuela = CTA (salida) - CTA (entrada), pero ENCADENADO desde ayer
-    // (igual que Cadivi/Faltante/Utilidad Venezuela) -- antes solo miraba el dia
-    // de hoy y perdia todo lo acumulado, eso ya esta corregido.
-    const bbvaVenezuelaHoy = movPesosHoy
-      .filter((m) => m.tipo === 'salida' && m.concepto === 'CTA')
-      .reduce((s, m) => s + Number(m.monto || 0), 0);
-    const abonosVenezuelaHoy = movPesosHoy
-      .filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA')
-      .reduce((s, m) => s + Number(m.monto || 0), 0);
-
-    const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
-    const moneygramAyer = otrosAnterior ? Number(otrosAnterior.moneygram_nos_debe_ars || 0) : 0;
-    const latinAyer = otrosAnterior ? Number(otrosAnterior.latin_debemos_ars || 0) : 0;
-    const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
-    const moneygramSugerido = moneygramAyer + salidaMHoy - abonoLatinHoy;
-    const latinSugerido = latinAyer + entradaMHoy;
-    const deboVenezuelaSugerido = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
-
-    const utilidadDia = motor.fechaCalculada === fecha ? motor.utilidadDelDia : 0;
-    const existenciaTenencias = Object.values(motor.monedas).reduce(
-      (s, p) => s + p.cantidad * p.costo_promedio, 0
-    );
-    const salidaTotal = salidasHoy.reduce((s, r) => s + Number(r.total_ars || 0), 0);
-    const entradasTotal = entradasHoy.reduce((s, r) => s + Number(r.total_ars || 0), 0);
-    const gastosTotalCalculado = gastosHoy.reduce((s, r) => s + Number(r.total_ars || 0), 0);
-    const gastosDia = resumenGuardado ? Number(resumenGuardado.gastos_dia_ars || 0) : gastosTotalCalculado;
-
-    const otros = otrosGuardados || { latin_debemos_ars: 0, moneygram_nos_debe_ars: 0, debo_venezuela_ars: 0 };
-    const otrosGuardado_existe = !!otrosGuardados;
-    const existencia = existenciaTenencias + salidaTotal + Number(otros.moneygram_nos_debe_ars || 0) + ajustesExistencia;
-
-    // anterior = ultimo registro guardado antes de esta fecha
-    const anterior = historialAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
-    const resetUtilidad = resumenGuardado ? !!resumenGuardado.resetear_utilidad_acumulada : false;
-    const resetGastos = resumenGuardado ? !!resumenGuardado.resetear_gastos_acumulado : false;
-    const resetCadivi = resumenGuardado ? !!resumenGuardado.resetear_cadivi : false;
-    const resetFaltante = resumenGuardado ? !!resumenGuardado.resetear_faltante : false;
-    const utilidadAcumAnterior = (anterior && !resetUtilidad) ? Number(anterior.utilidad_acumulada_ars || 0) : 0;
-    const gastosAcumAnterior = (anterior && !resetGastos) ? Number(anterior.gastos_acumulado_ars || 0) : 0;
-    const cadiviAcumAnterior = (anterior && !resetCadivi) ? Number(anterior.utilidad_cadivi_ars || 0) : 0;
-    const faltanteAcumAnterior = (anterior && !resetFaltante) ? Number(anterior.faltante_sobrante_ars || 0) : 0;
-
-    const utilidadParaAcum = resumenGuardado ? Number(resumenGuardado.utilidad_diaria_ars || 0) : utilidadDia;
-    const utilidadAcumulada = utilidadParaAcum + utilidadAcumAnterior;
-    const gastosAcumulado = gastosDia + gastosAcumAnterior;
-    const totalCierre = utilidadAcumulada - gastosAcumulado;
-
-    // Utilidad Cadivi = Utilidad Venezuela (confirmado por el usuario que es el mismo
-    // numero en ambas planillas, con nombre distinto -- un solo campo, no dos)
-    const cadiviDia = resumenGuardado ? Number(resumenGuardado.cadivi_dia_ars || 0) : 0;
-    const cadiviDescuentos = resumenGuardado ? Number(resumenGuardado.cadivi_descuentos_ars || 0) : 0;
-    const cadiviAdicional = resumenGuardado ? Number(resumenGuardado.cadivi_adicional_ars || 0) : 0;
-    const utilidadCadivi = cadiviAcumAnterior + cadiviDia - cadiviDescuentos + cadiviAdicional;
-
-    const faltanteDia = resumenGuardado ? Number(resumenGuardado.faltante_dia_ars || 0) : 0;
-    const faltanteDescuento = resumenGuardado ? Number(resumenGuardado.faltante_descuento_ars || 0) : 0;
-    const faltanteSobrante = faltanteAcumAnterior + faltanteDia - faltanteDescuento;
-
-    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + Number(otros.latin_debemos_ars || 0) + ajustesDebemos;
-    const diferenciaChequeo = existencia - debemos;
-
-    _ultimoCalculoCierre = {
-      fecha, utilidadDia, gastosTotalCalculado, gastosDia,
-      utilidadAcumAnterior, gastosAcumAnterior, utilidadAcumulada, gastosAcumulado, totalCierre,
-      cadiviAcumAnterior, faltanteAcumAnterior,
-      existencia, debemos, diferenciaChequeo,
-    };
-
-    cardsWrap.innerHTML = '';
-    [
-      { label: 'Utilidad del dia (compra/venta)', valor: utilidadDia, clase: utilidadDia >= 0 ? 'positivo' : 'negativo' },
-      { label: 'Gastos del dia (cargados)', valor: gastosTotalCalculado, clase: 'negativo' },
-      { label: 'Utilidad acumulada', valor: utilidadAcumulada, clase: 'positivo' },
-      { label: 'Gastos acumulado', valor: gastosAcumulado, clase: 'negativo' },
-      { label: 'TOTAL (Utilidad acum. − Gastos acum.)', valor: totalCierre, clase: totalCierre >= 0 ? 'positivo' : 'negativo' },
-      { label: 'Utilidad Cadivi/Venezuela acumulada', valor: utilidadCadivi, clase: '' },
-      { label: 'Faltante/Sobrante acumulado', valor: faltanteSobrante, clase: '' },
-      { label: 'Existencia (lo que tenemos)', valor: existencia, clase: '' },
-      { label: 'Debemos (lo que se debe)', valor: debemos, clase: '' },
-    ].forEach((it) => {
-      cardsWrap.appendChild(UI.el('div', { class: 'stat-card' }, [
-        UI.el('div', { class: 'label' }, it.label),
-        UI.el('div', { class: `value ${it.clase}` }, UI.formatoARS(it.valor)),
-      ]));
-    });
-
-    const ok = Math.abs(diferenciaChequeo) < 1;
-    chequeoWrap.appendChild(UI.el('div', {
-      style: `padding:12px 16px; border-radius:8px; font-size:13px; background:${ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'}; color:${ok ? 'var(--primary)' : 'var(--danger)'};`,
-    }, ok
-      ? '✓ El chequeo cierra: Existencia = Debemos.'
-      : `⚠ Diferencia sin explicar: ${UI.formatoARS(diferenciaChequeo)}. Revisa gastos, entradas, salidas u "otros saldos" cargados para esta fecha.`
-    ));
-
-    // precargar formulario
-    document.getElementById('rd-utilidad').value = resumenGuardado ? resumenGuardado.utilidad_diaria_ars : utilidadDia;
-    document.getElementById('rd-gastos-dia').value = resumenGuardado ? resumenGuardado.gastos_dia_ars : gastosTotalCalculado;
-    document.getElementById('rd-faltante-dia').value = faltanteDia;
-    document.getElementById('rd-faltante-descuento').value = faltanteDescuento;
-    document.getElementById('rd-cadivi-dia').value = cadiviDia;
-    document.getElementById('rd-cadivi-descuentos').value = cadiviDescuentos;
-    document.getElementById('rd-cadivi-adicional').value = cadiviAdicional;
-    document.getElementById('rd-tasa').value = resumenGuardado ? resumenGuardado.tasa_us_cierre : 0;
-    document.getElementById('rd-notas').value = resumenGuardado ? (resumenGuardado.notas || '') : '';
-    document.getElementById('rd-reset-utilidad').checked = resetUtilidad;
-    document.getElementById('rd-reset-gastos').checked = resetGastos;
-    document.getElementById('rd-reset-cadivi').checked = resetCadivi;
-    document.getElementById('rd-reset-faltante').checked = resetFaltante;
-    document.getElementById('rd-latin').value = otrosGuardado_existe ? otros.latin_debemos_ars : latinSugerido;
-    document.getElementById('rd-moneygram').value = otrosGuardado_existe ? otros.moneygram_nos_debe_ars : moneygramSugerido;
-    document.getElementById('rd-venezuela').value = otrosGuardado_existe ? otros.debo_venezuela_ars : deboVenezuelaSugerido;
-    document.getElementById('rd-otras-salidas').value = otros.otras_salidas_pesos_ars || 0;
-    document.getElementById('rd-otras-entradas').value = otros.otras_entradas_pesos_ars || 0;
+    const [operaciones, entradas, salidas, gastos, movPesos] = await Promise.all([
+      Api.get('/operaciones', { desde: fecha, hasta: fecha }),
+      Api.estadoActual('/entradas', fecha),
+      Api.estadoActual('/salidas', fecha),
+      Api.get('/gastos', { desde: fecha, hasta: fecha }),
+      Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
+    ]);
+    wrap.innerHTML = '';
+    wrap.appendChild(panelTabla('🔄 Compra / Venta', [
+      { key: 'tipo', label: 'Tipo' }, { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'cantidad', label: 'Cantidad', render: (f) => UI.formatoNumero(f.cantidad) },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], operaciones, 'total_ars'));
+    wrap.appendChild(panelTabla('⬇️ Entradas y préstamos (estado vigente)', [
+      { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], entradas.filter((f) => Number(f.total_ars) !== 0), 'total_ars'));
+    wrap.appendChild(panelTabla('⬆️ Salidas / préstamos (estado vigente)', [
+      { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], salidas.filter((f) => Number(f.total_ars) !== 0), 'total_ars'));
+    wrap.appendChild(panelTabla('🧾 Gastos', [
+      { key: 'concepto', label: 'Concepto' }, { key: 'moneda_codigo', label: 'Moneda' },
+      { key: 'total_ars', label: 'Total ARS', render: (f) => UI.formatoARS(f.total_ars) },
+    ], gastos, 'total_ars'));
+    wrap.appendChild(panelTabla('💵 Movimientos de pesos', [
+      { key: 'tipo', label: 'Tipo' }, { key: 'concepto', label: 'Concepto' },
+      { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
+    ], movPesos, 'monto'));
   } catch (err) {
-    cardsWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+    wrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
   }
 }
 
@@ -1277,128 +1114,104 @@ function diaAnterior(fechaStr) {
   return d.toISOString().slice(0, 10);
 }
 
-async function guardarCierreDelDia(e) {
+// Hace TODO en un solo paso: calcula utilidad (motor), gastos (suma de la
+// tabla), Latin/MoneyGram/Debo-a-Venezuela (formulas confirmadas), y
+// encadena Utilidad Venezuela y Utilidad/Gastos acumulados -- todo junto,
+// una sola escritura atomica por tabla, sin estados intermedios.
+async function cerrarElDia(e) {
   e.preventDefault();
   const fecha = document.getElementById('rd-fecha').value;
-  const resetUtilidad = document.getElementById('rd-reset-utilidad').checked;
-  const resetGastos = document.getElementById('rd-reset-gastos').checked;
-  const resetCadivi = document.getElementById('rd-reset-cadivi').checked;
-  const resetFaltante = document.getElementById('rd-reset-faltante').checked;
-
-  const utilidad = Number(document.getElementById('rd-utilidad').value) || 0;
-  const gastosDia = Number(document.getElementById('rd-gastos-dia').value) || 0;
-  const faltanteDia = Number(document.getElementById('rd-faltante-dia').value) || 0;
-  const faltanteDescuento = Number(document.getElementById('rd-faltante-descuento').value) || 0;
   const cadiviDia = Number(document.getElementById('rd-cadivi-dia').value) || 0;
-  const cadiviDescuentos = Number(document.getElementById('rd-cadivi-descuentos').value) || 0;
-  const cadiviAdicional = Number(document.getElementById('rd-cadivi-adicional').value) || 0;
-
-  const c = _ultimoCalculoCierre;
-  const utilidadAcumAnterior = resetUtilidad ? 0 : (c ? c.utilidadAcumAnterior : 0);
-  const gastosAcumAnterior = resetGastos ? 0 : (c ? c.gastosAcumAnterior : 0);
-  const cadiviAcumAnterior = resetCadivi ? 0 : (c ? c.cadiviAcumAnterior : 0);
-  const faltanteAcumAnterior = resetFaltante ? 0 : (c ? c.faltanteAcumAnterior : 0);
-
-  const utilidadAcumulada = utilidad + utilidadAcumAnterior;
-  const gastosAcumulado = gastosDia + gastosAcumAnterior;
-  const utilidadCadivi = cadiviAcumAnterior + cadiviDia - cadiviDescuentos + cadiviAdicional;
-  const faltanteSobrante = faltanteAcumAnterior + faltanteDia - faltanteDescuento;
-  // TOTAL = Utilidad acumulada - Gastos acumulado (confirmado contra la planilla real,
-  // el faltante/sobrante NO se suma aca -- solo interviene en el chequeo Debemos)
-  const total = utilidadAcumulada - gastosAcumulado;
-
-  const body = {
-    utilidad_diaria_ars: utilidad,
-    gastos_dia_ars: gastosDia,
-    faltante_dia_ars: faltanteDia,
-    faltante_descuento_ars: faltanteDescuento,
-    faltante_sobrante_ars: faltanteSobrante,
-    cadivi_dia_ars: cadiviDia,
-    cadivi_descuentos_ars: cadiviDescuentos,
-    cadivi_adicional_ars: cadiviAdicional,
-    utilidad_cadivi_ars: utilidadCadivi,
-    tasa_us_cierre: Number(document.getElementById('rd-tasa').value) || 0,
-    utilidad_acumulada_ars: utilidadAcumulada,
-    gastos_acumulado_ars: gastosAcumulado,
-    total_ars: total,
-    notas: document.getElementById('rd-notas').value,
-    resetear_utilidad_acumulada: resetUtilidad,
-    resetear_gastos_acumulado: resetGastos,
-    resetear_cadivi: resetCadivi,
-    resetear_faltante: resetFaltante,
-  };
+  const resultadoWrap = document.getElementById('rd-resultado');
+  resultadoWrap.innerHTML = '<div class="empty-state">Cerrando el día...</div>';
 
   try {
-    await Api.put(`/resumen-diario/${fecha}`, body);
-    UI.toast('Cierre del dia guardado.');
-    await calcularCierreDelDia();
-    await cargarHistorialResumen();
-  } catch (err) {
-    UI.toast(err.message, 'error');
-  }
-}
+    const [motor, gastosHoy, historialAnterior, entradas, salidas] = await Promise.all([
+      Api.get('/motor/posiciones', { hasta: fecha }),
+      Api.get('/gastos', { desde: fecha, hasta: fecha }),
+      Api.get('/resumen-diario', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
+      Api.estadoActual('/entradas', fecha),
+      Api.estadoActual('/salidas', fecha),
+    ]);
 
-async function guardarOtrosSaldos() {
-  const fecha = document.getElementById('rd-fecha').value;
-  const deboVenezuela = Number(document.getElementById('rd-venezuela').value) || 0;
-  try {
+    const utilidadDia = motor.fechaCalculada === fecha ? motor.utilidadDelDia : 0;
+    const gastosDia = gastosHoy.reduce((s, g) => s + Number(g.total_ars || 0), 0);
+
+    const anterior = historialAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
+    const utilidadAcumAnterior = anterior ? Number(anterior.utilidad_acumulada_ars || 0) : 0;
+    const gastosAcumAnterior = anterior ? Number(anterior.gastos_acumulado_ars || 0) : 0;
+    const cadiviAcumAnterior = anterior ? Number(anterior.utilidad_cadivi_ars || 0) : 0;
+    const faltanteAcumAnterior = anterior ? Number(anterior.faltante_sobrante_ars || 0) : 0;
+
+    const utilidadAcumulada = utilidadDia + utilidadAcumAnterior;
+    const gastosAcumulado = gastosDia + gastosAcumAnterior;
+    const utilidadCadivi = cadiviAcumAnterior + cadiviDia; // sin descuentos/adicional -- simplificado
+    const faltanteSobrante = faltanteAcumAnterior; // no se toca -- se mantiene igual que ayer
+    const total = utilidadAcumulada - gastosAcumulado;
+
+    const { moneygram, latin } = await calcularLatinMoneygram(fecha);
+    const { ctaBrutoAcumulado, deboVenezuela } = await calcularCtaVenezuela(fecha);
+
+    await Api.put(`/resumen-diario/${fecha}`, {
+      utilidad_diaria_ars: utilidadDia,
+      gastos_dia_ars: gastosDia,
+      cadivi_dia_ars: cadiviDia,
+      cadivi_descuentos_ars: 0,
+      cadivi_adicional_ars: 0,
+      utilidad_cadivi_ars: utilidadCadivi,
+      faltante_dia_ars: 0,
+      faltante_descuento_ars: 0,
+      faltante_sobrante_ars: faltanteSobrante,
+      utilidad_acumulada_ars: utilidadAcumulada,
+      gastos_acumulado_ars: gastosAcumulado,
+      total_ars: total,
+      resetear_utilidad_acumulada: false,
+      resetear_gastos_acumulado: false,
+      resetear_cadivi: false,
+      resetear_faltante: false,
+    });
     await Api.put(`/otros-saldos/${fecha}`, {
-      latin_debemos_ars: Number(document.getElementById('rd-latin').value) || 0,
-      moneygram_nos_debe_ars: Number(document.getElementById('rd-moneygram').value) || 0,
+      latin_debemos_ars: latin,
+      moneygram_nos_debe_ars: moneygram,
       debo_venezuela_ars: deboVenezuela,
-      otras_salidas_pesos_ars: Number(document.getElementById('rd-otras-salidas').value) || 0,
-      otras_entradas_pesos_ars: Number(document.getElementById('rd-otras-entradas').value) || 0,
     });
+    await guardarCtaVenezuela(fecha, ctaBrutoAcumulado);
 
-    // Ademas de guardarlo como saldo informativo, lo reflejamos como un
-    // renglon en Salidas (concepto fijo) para que tambien entre en el
-    // calculo de Existencia -- pedido explicito del usuario.
-    await Api.post('/salidas', {
-      fecha,
-      concepto: 'CTA BBVA Lili Venezuela',
-      moneda_id: (Estado.monedas.find((m) => m.codigo === 'ARS') || {}).id,
-      valor: deboVenezuela,
-      porcentaje: 0,
-      total_ars: deboVenezuela,
+    // Chequeo final: Existencia vs Debemos
+    const existenciaTenencias = Object.values(motor.monedas || {}).reduce((s, p) => s + p.cantidad * p.costo_promedio, 0);
+    const salidaTotal = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const entradasTotal = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const existencia = existenciaTenencias + salidaTotal + moneygram;
+    const debemos = entradasTotal + utilidadCadivi + faltanteSobrante + latin;
+    const diferencia = existencia - debemos;
+    const ok = Math.abs(diferencia) < 1;
+
+    resultadoWrap.innerHTML = '';
+    const panel = UI.el('div', { class: 'panel' }, [UI.el('h3', {}, '✅ Día cerrado')]);
+    const grid = UI.el('div', { class: 'cards-grid' });
+    [
+      ['Utilidad del día', utilidadDia, 'positivo'],
+      ['Gastos del día', gastosDia, 'negativo'],
+      ['TOTAL (Utilidad − Gastos acum.)', total, total >= 0 ? 'positivo' : 'negativo'],
+      ['Existencia', existencia, ''],
+      ['Debemos', debemos, ''],
+      ['Diferencia', diferencia, ok ? 'positivo' : 'negativo'],
+    ].forEach(([label, valor, clase]) => {
+      grid.appendChild(UI.el('div', { class: 'stat-card' }, [
+        UI.el('div', { class: 'label' }, label),
+        UI.el('div', { class: `value ${clase}` }, UI.formatoARS(valor)),
+      ]));
     });
-
-    UI.toast('Otros saldos guardados.');
-    await calcularCierreDelDia();
+    panel.appendChild(grid);
+    panel.appendChild(UI.el('div', {
+      style: `margin-top:10px; padding:10px 14px; border-radius:8px; font-size:13px; background:${ok ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)'}; color:${ok ? 'var(--primary)' : 'var(--danger)'};`,
+    }, ok ? '✓ Cierra correctamente.' : '⚠ Hay una diferencia sin explicar.'));
+    resultadoWrap.appendChild(panel);
+    UI.toast('Día cerrado.');
   } catch (err) {
+    resultadoWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
     UI.toast(err.message, 'error');
   }
-}
-
-async function cargarHistorialResumen() {
-  const desde = document.getElementById('f-desde').value;
-  const hasta = document.getElementById('f-hasta').value;
-  const wrap = document.getElementById('tabla-wrap');
-  const filas = await Api.get('/resumen-diario', { desde, hasta });
-  if (filas.length === 0) {
-    wrap.innerHTML = '<div class="empty-state">No hay registros en este periodo.</div>';
-    return;
-  }
-  const table = UI.el('table', {}, [
-    UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Utilidad dia', 'Gastos dia', 'Utilidad acum.', 'Gastos acum.', 'Total', 'Reset'].map((h) => UI.el('th', {}, h)))),
-  ]);
-  const tbody = UI.el('tbody');
-  filas.forEach((f) => {
-    const reset = [];
-    if (f.resetear_utilidad_acumulada) reset.push('Util.');
-    if (f.resetear_gastos_acumulado) reset.push('Gast.');
-    tbody.appendChild(UI.el('tr', {}, [
-      UI.el('td', {}, f.fecha),
-      UI.el('td', {}, UI.formatoARS(f.utilidad_diaria_ars)),
-      UI.el('td', {}, UI.formatoARS(f.gastos_dia_ars)),
-      UI.el('td', {}, UI.formatoARS(f.utilidad_acumulada_ars)),
-      UI.el('td', {}, UI.formatoARS(f.gastos_acumulado_ars)),
-      UI.el('td', {}, UI.formatoARS(f.total_ars)),
-      UI.el('td', {}, reset.length ? `↺ ${reset.join(', ')}` : ''),
-    ]));
-  });
-  table.appendChild(tbody);
-  wrap.innerHTML = '';
-  wrap.appendChild(table);
 }
 
 /* ======================================================================
@@ -2102,24 +1915,17 @@ async function cargarCierreCompleto() {
 
     cont.innerHTML = '';
 
-    // Si "Otros saldos" no fue guardado explicitamente para esta fecha, calculamos
-    // la misma sugerencia que se ve en Cierre diario (en vez de mostrar $0 a secas),
-    // usando los conceptos fijos MONEY / LATIN / CTA de Movimientos de pesos.
-    const salidaMHoy = movPesos.filter((m) => m.tipo === 'salida' && m.concepto === 'MONEY').reduce((s, m) => s + Number(m.monto || 0), 0);
-    const entradaMHoy = movPesos.filter((m) => m.tipo === 'entrada' && m.concepto === 'MONEY').reduce((s, m) => s + Number(m.monto || 0), 0);
-    const abonoLatinHoy = movPesos.filter((m) => m.tipo === 'entrada' && m.concepto === 'LATIN').reduce((s, m) => s + Number(m.monto || 0), 0);
-    const otrosAnteriorCC = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
-    const moneygramAyerCC = otrosAnteriorCC ? Number(otrosAnteriorCC.moneygram_nos_debe_ars || 0) : 0;
-    const latinAyerCC = otrosAnteriorCC ? Number(otrosAnteriorCC.latin_debemos_ars || 0) : 0;
-    const deboVenezuelaAyerCC = otrosAnteriorCC ? Number(otrosAnteriorCC.debo_venezuela_ars || 0) : 0;
-
-    const bbvaVenezuelaCC = movPesos.filter((m) => m.tipo === 'salida' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
-    const abonosVenezuelaCC = movPesos.filter((m) => m.tipo === 'entrada' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
-
-    const o = otros || {
-      latin_debemos_ars: latinAyerCC + entradaMHoy,
-      moneygram_nos_debe_ars: moneygramAyerCC + salidaMHoy - abonoLatinHoy,
-      debo_venezuela_ars: deboVenezuelaAyerCC + bbvaVenezuelaCC - abonosVenezuelaCC,
+    // Siempre calculamos en vivo con las mismas funciones puras que usa Cierre
+    // diario -- Cierre completo NUNCA confia en lo guardado en otros_saldos_diarios
+    // para "hoy" (solo lo usa como referencia de "ayer" dentro de esas funciones).
+    // Asi da lo mismo el orden en que se cargaron las cosas, y no puede quedar
+    // un valor pegado en 0 por una sincronizacion a medias.
+    const { moneygram: moneygramCC, latin: latinCC } = await calcularLatinMoneygram(fecha);
+    const { deboVenezuela: deboVenezuelaCC } = await calcularCtaVenezuela(fecha);
+    const o = {
+      latin_debemos_ars: latinCC,
+      moneygram_nos_debe_ars: moneygramCC,
+      debo_venezuela_ars: deboVenezuelaCC,
     };
 
     // ---- Posicion actual (tenencias) ----
