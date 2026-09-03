@@ -211,6 +211,10 @@ function crearVistaCrud(cfg) {
           ${cfg.conceptosAditivos && cfg.conceptosAditivos.length ? `<br/><strong>Excepción:</strong> ${cfg.conceptosAditivos.join(' y ')} funcionan distinto —
           lo que cargues se SUMA al valor que ya había (no lo reemplaza).` : ''}
         </p>` : ''}
+        ${cfg.conceptosAditivos && cfg.conceptosAditivos.length ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">
+          ${cfg.conceptosAditivos.map((c) => `<button type="button" class="btn-secondary btn-concepto-aditivo" data-concepto="${c}">➕ ${c}</button>`).join('')}
+        </div>` : ''}
         <form id="form-crud" class="form-grid"></form>
       </div>` : ''}
       <div class="panel">
@@ -260,6 +264,23 @@ function crearVistaCrud(cfg) {
         document.getElementById(`campo-${campoMoneda}`).addEventListener('change', intentarAutocompletar);
       }
 
+      // Botones de concepto aditivo: llenan el campo Concepto con el texto EXACTO
+      // (sin que el usuario tenga que tipearlo) y lo bloquean para que no se pueda
+      // desviar por error -- asi el "match" con el registro anterior es siempre
+      // perfecto, sin depender de tipeo.
+      document.querySelectorAll('.btn-concepto-aditivo').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const campoConcepto = document.getElementById('campo-concepto');
+          if (campoConcepto) {
+            campoConcepto.value = btn.dataset.concepto;
+            campoConcepto.readOnly = true;
+            campoConcepto.style.background = 'var(--bg-panel-light)';
+          }
+          const campoValor = document.getElementById('campo-valor') || document.getElementById('campo-monto');
+          if (campoValor) campoValor.focus();
+        });
+      });
+
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const body = {};
@@ -274,12 +295,15 @@ function crearVistaCrud(cfg) {
         // Conceptos aditivos (ej: "Sobrantes del dia", "Abono cuentas Venezuela"):
         // en vez de reemplazar el valor vigente, lo que se carga se SUMA al
         // total que ya habia -- y se guarda el total combinado (no solo lo nuevo).
-        const conceptoNorm = (body.concepto || '').trim().toLowerCase();
-        const esAditivo = cfg.conceptosAditivos && cfg.conceptosAditivos.some((c) => c.trim().toLowerCase() === conceptoNorm);
+        // Usa la MISMA normalizacion que Api.estadoActual (espacios/mayusculas no
+        // deberian crear un concepto "nuevo" sin querer).
+        const normalizarConcepto = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        const conceptoNorm = normalizarConcepto(body.concepto);
+        const esAditivo = cfg.conceptosAditivos && cfg.conceptosAditivos.some((c) => normalizarConcepto(c) === conceptoNorm);
         if (esAditivo && cfg.esEstadoQueArrastra) {
           try {
             const vigentes = await Api.estadoActual(cfg.endpoint, body.fecha);
-            const anterior = vigentes.find((f) => (f.concepto || '').trim().toLowerCase() === conceptoNorm);
+            const anterior = vigentes.find((f) => normalizarConcepto(f.concepto) === conceptoNorm);
             const baseAnterior = anterior ? Number(anterior.total_ars || 0) : 0;
             const nuevoTotal = baseAnterior + Number(body.total_ars || 0);
             body.valor = nuevoTotal;
@@ -298,6 +322,11 @@ function crearVistaCrud(cfg) {
           cfg.campos.forEach((c) => {
             if (c.default !== undefined) document.getElementById(`campo-${c.key}`).value = c.default();
           });
+          const campoConcepto = document.getElementById('campo-concepto');
+          if (campoConcepto) {
+            campoConcepto.readOnly = false;
+            campoConcepto.style.background = '';
+          }
           cargarTablaCrud(cfg, puedeEscribir);
         } catch (err) {
           UI.toast(err.message, 'error');
@@ -1262,94 +1291,84 @@ async function vistaUtilidadMensual(contenedor) {
       <div class="filters-bar">
         <div><label>Año</label><input type="number" id="um-anio" value="${anioActual}" /></div>
         <button class="btn-secondary" id="um-aplicar">Ver</button>
-        <button class="btn-secondary" id="um-autocompletar">🔄 Autocompletar Utilidades Libres desde Cierre diario</button>
       </div>
     </header>
     <p style="color:var(--text-muted); font-size:13px; margin-top:-10px;">
-      "Utilidades Libres" (ARS) se puede autocompletar sumando la utilidad diaria ya calculada
-      en <strong>Cierre diario</strong> para cada mes. "Total US" se calcula solo dividiendo
-      Utilidades Libres por la Tasa de cierre que cargues — igual que en la planilla original.
-      Todo sigue siendo editable.
+      "Utilidades Libres" (ARS) se calcula y guarda solo, sumando la utilidad diaria ya
+      cargada en <strong>Cierre diario</strong> de cada mes. "Total US" se calcula solo
+      dividiendo por la Tasa de cierre. Todo se guarda automáticamente apenas lo tocás — no
+      hace falta tocar ningún botón de Guardar.
     </p>
     <div class="panel">
       <table>
-        <thead><tr><th>Mes</th><th>Tasa de cierre</th><th>Utilidades Libres (ARS)</th><th>Total US</th><th>Notas</th><th></th></tr></thead>
+        <thead><tr><th>Mes</th><th>Tasa de cierre</th><th>Utilidades Libres (ARS)</th><th>Total US</th><th>Notas</th></tr></thead>
         <tbody id="um-tbody"></tbody>
       </table>
     </div>
   `;
   document.getElementById('um-aplicar').addEventListener('click', cargarUtilidadMensual);
-  document.getElementById('um-autocompletar').addEventListener('click', autocompletarUtilidadAnual);
   await cargarUtilidadMensual();
 }
 
 async function cargarUtilidadMensual() {
   const anio = document.getElementById('um-anio').value;
-  const data = await Api.get('/utilidad-mensual', { anio });
+  const [data, filasResumen] = await Promise.all([
+    Api.get('/utilidad-mensual', { anio }),
+    Api.get('/resumen-diario', { desde: `${anio}-01-01`, hasta: `${anio}-12-31` }),
+  ]);
   const porMes = {};
   data.forEach((d) => { porMes[d.mes] = d; });
+
+  // Suma automatica de la utilidad diaria (Cierre diario) de cada mes
+  const sumaPorMes = {};
+  filasResumen.forEach((f) => {
+    const mes = Number(f.fecha.slice(5, 7));
+    sumaPorMes[mes] = (sumaPorMes[mes] || 0) + Number(f.utilidad_diaria_ars || 0);
+  });
 
   const tbody = document.getElementById('um-tbody');
   tbody.innerHTML = '';
   for (let mes = 1; mes <= 12; mes++) {
     const registro = porMes[mes] || { utilidad_us: 0, utilidad_ars: 0, tasa_cierre: 0, notas: '' };
+    const arsAutomatico = sumaPorMes[mes] !== undefined ? sumaPorMes[mes] : registro.utilidad_ars;
     const idTasa = `um-tasa-${mes}`, idArs = `um-ars-${mes}`, idUs = `um-us-${mes}`, idNotas = `um-notas-${mes}`;
 
     const inputTasa = UI.el('input', { type: 'number', step: 'any', id: idTasa, value: registro.tasa_cierre, style: 'margin-bottom:0;' });
-    const inputArs = UI.el('input', { type: 'number', step: 'any', id: idArs, value: registro.utilidad_ars, style: 'margin-bottom:0;' });
+    const inputArs = UI.el('input', { type: 'number', step: 'any', id: idArs, value: arsAutomatico, style: 'margin-bottom:0;' });
     const inputUs = UI.el('input', { type: 'number', step: 'any', id: idUs, value: registro.utilidad_us, style: 'margin-bottom:0;' });
 
     const recalcularUs = () => {
       const tasa = Number(inputTasa.value) || 0;
       const ars = Number(inputArs.value) || 0;
-      if (tasa > 0) inputUs.value = ars / tasa;
+      inputUs.value = tasa > 0 ? ars / tasa : 0;
     };
-    inputTasa.addEventListener('input', recalcularUs);
-    inputArs.addEventListener('input', recalcularUs);
+    recalcularUs(); // recalcula ya al cargar, usando el ARS automatico
+
+    const guardarAutomatico = () => guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa);
+    [inputTasa, inputArs].forEach((el) => {
+      el.addEventListener('input', recalcularUs);
+      el.addEventListener('change', guardarAutomatico);
+    });
+    const inputNotas = UI.el('input', { type: 'text', id: idNotas, value: registro.notas || '', style: 'margin-bottom:0;' });
+    inputNotas.addEventListener('change', guardarAutomatico);
 
     const tr = UI.el('tr', {}, [
       UI.el('td', {}, NOMBRES_MESES[mes - 1]),
       UI.el('td', {}, inputTasa),
       UI.el('td', {}, inputArs),
       UI.el('td', {}, inputUs),
-      UI.el('td', {}, UI.el('input', { type: 'text', id: idNotas, value: registro.notas || '', style: 'margin-bottom:0;' })),
-      UI.el('td', {}, UI.el('button', { class: 'btn-secondary', onclick: () => guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa) }, 'Guardar')),
+      UI.el('td', {}, inputNotas),
     ]);
     tbody.appendChild(tr);
-  }
-}
 
-// Suma la utilidad diaria (Cierre diario) de cada mes del año elegido, y precarga
-// el campo "Utilidades Libres" de cada fila con ese total (sin guardar todavia -- el
-// usuario revisa y toca "Guardar" en cada mes que le parezca correcto).
-async function autocompletarUtilidadAnual() {
-  const anio = Number(document.getElementById('um-anio').value);
-  UI.toast('Sumando utilidad diaria por mes...');
-  try {
-    const desde = `${anio}-01-01`;
-    const hasta = `${anio}-12-31`;
-    const filas = await Api.get('/resumen-diario', { desde, hasta });
-
-    const totalesPorMes = {};
-    filas.forEach((f) => {
-      const mes = Number(f.fecha.slice(5, 7));
-      totalesPorMes[mes] = (totalesPorMes[mes] || 0) + Number(f.utilidad_diaria_ars || 0);
-    });
-
-    for (let mes = 1; mes <= 12; mes++) {
-      const input = document.getElementById(`um-ars-${mes}`);
-      if (input && totalesPorMes[mes] !== undefined) {
-        input.value = totalesPorMes[mes];
-        input.dispatchEvent(new Event('input'));
-      }
+    // Guardado automatico al cargar la pantalla, si hay suma nueva desde Cierre diario
+    if (sumaPorMes[mes] !== undefined && sumaPorMes[mes] !== registro.utilidad_ars) {
+      guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa, true);
     }
-    UI.toast('Listo. Revisa cada mes y toca "Guardar" para confirmar.');
-  } catch (err) {
-    UI.toast(err.message, 'error');
   }
 }
 
-async function guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa) {
+async function guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa, silencioso) {
   try {
     await Api.put(`/utilidad-mensual/${anio}/${mes}`, {
       utilidad_us: Number(document.getElementById(idUs).value) || 0,
@@ -1357,7 +1376,7 @@ async function guardarUtilidadMes(anio, mes, idUs, idArs, idNotas, idTasa) {
       tasa_cierre: Number(document.getElementById(idTasa).value) || 0,
       notas: document.getElementById(idNotas).value,
     });
-    UI.toast(`${NOMBRES_MESES[mes - 1]} guardado.`);
+    if (!silencioso) UI.toast(`${NOMBRES_MESES[mes - 1]} guardado.`);
   } catch (err) {
     UI.toast(err.message, 'error');
   }

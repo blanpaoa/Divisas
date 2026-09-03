@@ -50,10 +50,14 @@ const Api = {
   // (CAPITAL-PERDIDAS, ULTIMA UTILI, etc se repiten solas sin recargarlas).
   async estadoActual(endpoint, fechaHasta) {
     const todas = await this.get(endpoint, { desde: '2000-01-01', hasta: fechaHasta });
+    // Normalizamos la clave de agrupado (espacios y mayusculas no deberian crear
+    // conceptos distintos) -- antes agrupaba por el texto EXACTO, y una diferencia
+    // minima de tipeo hacia que dos entradas del mismo concepto quedaran separadas.
+    const normalizar = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
     const porConcepto = {};
     for (let i = todas.length - 1; i >= 0; i--) {
       const f = todas[i];
-      porConcepto[f.concepto] = f;
+      porConcepto[normalizar(f.concepto)] = f;
     }
     return Object.values(porConcepto).sort((a, b) => (a.concepto > b.concepto ? 1 : -1));
   },
