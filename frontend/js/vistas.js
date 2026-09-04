@@ -95,6 +95,14 @@ async function cargarDashboard() {
     );
   });
 
+  // Si por algun motivo la libreria de graficos no cargo (red, bloqueador de
+  // contenido, etc), mostramos los KPIs igual y salteamos los graficos en vez
+  // de romper toda la pantalla.
+  if (typeof Chart === 'undefined') {
+    UI.toast('Los graficos no se pudieron cargar (revisa tu conexion). El resto del Dashboard funciona igual.', 'error');
+    return;
+  }
+
   // Grafico de evolucion (linea): capital total y utilidad diaria
   destruirChart('evolucion');
   const fechasCapital = evolucion.capital_diario.map((r) => r.fecha);
@@ -689,10 +697,10 @@ const vistaEntradas = crearVistaCrud({
   titulo: '⬇️ Entradas y prestamos (capital recibido)',
   endpoint: '/entradas',
   esEstadoQueArrastra: true,
-  conceptosAditivos: ['SOBRANTES DEL DIA', 'ABONOS DE CUENTA TRANS, VENEZUELA'],
+  conceptosAditivos: ['SOBRANTES DEL DIA'],
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: [...CONCEPTOS_SUGERIDOS, 'SOBRANTES DEL DIA', 'ABONOS DE CUENTA TRANS, VENEZUELA'] },
+    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: [...CONCEPTOS_SUGERIDOS, 'SOBRANTES DEL DIA'] },
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
     { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
@@ -755,15 +763,16 @@ const vistaGastos = crearVistaCrud({
 });
 
 // Calcula (sin escribir nada en la base) el saldo BRUTO acumulado de "CTA BBVA
-// Lili Venezuela" y el NETO "Debo a Venezuela" para una fecha. Son dos cosas
-// distintas: el bruto es lo que suma a Existencia (via Salidas), el neto es
-// solo informativo. Funcion pura -- se puede llamar desde cualquier pantalla
-// sin riesgo de dejar datos a medias; quien la llama decide si guarda el
-// resultado o no.
+// Lili Venezuela" (lado salida, va a Salidas), el BRUTO acumulado de "ABONOS DE
+// CUENTA TRANS, VENEZUELA" (lado entrada, va a Entradas), y el NETO "Debo a
+// Venezuela" (informativo). Funcion pura -- se puede llamar desde cualquier
+// pantalla sin riesgo de dejar datos a medias; quien la llama decide si
+// guarda el resultado o no.
 async function calcularCtaVenezuela(fecha) {
-  const [movPesosHoy, salidasAnteriores, historialOtrosAnterior] = await Promise.all([
+  const [movPesosHoy, salidasAnteriores, entradasAnteriores, historialOtrosAnterior] = await Promise.all([
     Api.get('/movimientos-pesos', { desde: fecha, hasta: fecha }),
     Api.estadoActual('/salidas', diaAnterior(fecha)),
+    Api.estadoActual('/entradas', diaAnterior(fecha)),
     Api.get('/otros-saldos', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
   ]);
   const bbvaVenezuelaHoy = movPesosHoy.filter((m) => m.tipo === 'salida' && m.concepto === 'CTA').reduce((s, m) => s + Number(m.monto || 0), 0);
@@ -772,26 +781,41 @@ async function calcularCtaVenezuela(fecha) {
   const ctaAnterior = salidasAnteriores.find((f) => f.concepto === 'CTA BBVA Lili Venezuela');
   const ctaBrutoAcumulado = (ctaAnterior ? Number(ctaAnterior.total_ars || 0) : 0) + bbvaVenezuelaHoy;
 
+  const abonosAnterior = entradasAnteriores.find((f) => f.concepto === 'ABONOS DE CUENTA TRANS, VENEZUELA');
+  const abonosBrutoAcumulado = (abonosAnterior ? Number(abonosAnterior.total_ars || 0) : 0) + abonosVenezuelaHoy;
+
   const otrosAnterior = historialOtrosAnterior.sort((a, b) => (a.fecha < b.fecha ? 1 : -1))[0];
   const deboVenezuelaAyer = otrosAnterior ? Number(otrosAnterior.debo_venezuela_ars || 0) : 0;
   const deboVenezuela = deboVenezuelaAyer + bbvaVenezuelaHoy - abonosVenezuelaHoy;
 
-  return { ctaBrutoAcumulado, deboVenezuela };
+  return { ctaBrutoAcumulado, abonosBrutoAcumulado, deboVenezuela };
 }
 
-// Guarda lo que calculo() ya calculo: el bruto en Salidas, el neto en Otros
-// saldos. Se llama SOLO desde 'Guardar otros saldos' (Cierre diario) -- el
-// unico lugar que escribe, para que nunca queden datos a medias.
-async function guardarCtaVenezuela(fecha, ctaBrutoAcumulado) {
+// Guarda lo que calculo() ya calculo: el bruto salida en Salidas, el bruto
+// entrada en Entradas, el neto en Otros saldos. Se llama SOLO desde
+// 'Cerrar el dia' -- el unico lugar que escribe, para que nunca queden
+// datos a medias.
+async function guardarCtaVenezuela(fecha, ctaBrutoAcumulado, abonosBrutoAcumulado) {
   await Estado.cargarMonedas();
+  const idArs = (Estado.monedas.find((m) => m.codigo === 'ARS') || {}).id;
   await Api.post('/salidas', {
     fecha,
     concepto: 'CTA BBVA Lili Venezuela',
-    moneda_id: (Estado.monedas.find((m) => m.codigo === 'ARS') || {}).id,
+    moneda_id: idArs,
     valor: ctaBrutoAcumulado,
     porcentaje: 0,
     total_ars: ctaBrutoAcumulado,
   });
+  if (abonosBrutoAcumulado !== undefined) {
+    await Api.post('/entradas', {
+      fecha,
+      concepto: 'ABONOS DE CUENTA TRANS, VENEZUELA',
+      moneda_id: idArs,
+      valor: abonosBrutoAcumulado,
+      porcentaje: 0,
+      total_ars: abonosBrutoAcumulado,
+    });
+  }
 }
 
 // MoneyGram / Latin: formula del usuario, confirmada exacta contra 6 dias
@@ -838,21 +862,6 @@ const vistaMovimientosPesos = crearVistaCrud({
     { key: 'concepto', label: 'Concepto' },
     { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
     { key: 'observaciones', label: 'Observaciones' },
-  ],
-});
-
-const vistaDepositosBancarios = crearVistaCrud({
-  titulo: '🏦 Depósitos bancarios',
-  endpoint: '/depositos-bancarios',
-  campos: [
-    { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'monto', label: 'Monto (ARS)', type: 'number', default: () => 0 },
-    { key: 'notas', label: 'Notas', type: 'text', default: () => '' },
-  ],
-  columnas: [
-    { key: 'fecha', label: 'Fecha' },
-    { key: 'monto', label: 'Monto', render: (f) => UI.formatoARS(f.monto) },
-    { key: 'notas', label: 'Notas' },
   ],
 });
 
@@ -1201,7 +1210,7 @@ async function cerrarElDia(e) {
     const total = utilidadAcumulada - gastosAcumulado;
 
     const { moneygram, latin } = await calcularLatinMoneygram(fecha);
-    const { ctaBrutoAcumulado, deboVenezuela } = await calcularCtaVenezuela(fecha);
+    const { ctaBrutoAcumulado, abonosBrutoAcumulado, deboVenezuela } = await calcularCtaVenezuela(fecha);
 
     // Faltante/Sobrante absorbe automaticamente la diferencia del dia, para que
     // el chequeo (Existencia vs Debemos) cierre en $0 -- confirmado por el
@@ -1240,7 +1249,7 @@ async function cerrarElDia(e) {
       moneygram_nos_debe_ars: moneygram,
       debo_venezuela_ars: deboVenezuela,
     });
-    await guardarCtaVenezuela(fecha, ctaBrutoAcumulado);
+    await guardarCtaVenezuela(fecha, ctaBrutoAcumulado, abonosBrutoAcumulado);
 
     // Chequeo final: Existencia vs Debemos (con el faltante YA actualizado,
     // deberia dar $0 exacto)

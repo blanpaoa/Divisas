@@ -10,7 +10,6 @@ const RUTAS = {
   transferencias: vistaTransferencias,
   'movimientos-pesos': vistaMovimientosPesos,
   'ajustes-libres': vistaAjustesLibres,
-  'depositos-bancarios': vistaDepositosBancarios,
   'cierres-venezuela': vistaCierresVenezuela,
   'resumen-venezuela': vistaResumenVenezuela,
   prestamos: vistaPrestamos,
@@ -22,18 +21,31 @@ const RUTAS = {
   usuarios: vistaUsuarios,
 };
 
+// Vistas que el operador NO puede ver (solo admin) -- ademas de Apertura y
+// Usuarios (que ya estaban ocultas por defecto), estas se ocultan para
+// operador especificamente. Doble proteccion: se ocultan del menu Y se
+// bloquea la navegacion directa (por si escriben la ruta a mano).
+const VISTAS_SOLO_ADMIN = ['dashboard', 'cierre-completo', 'tenencias', 'tasas', 'resumen-venezuela', 'utilidad-mensual', 'monedas', 'apertura', 'usuarios'];
+let _rolActual = null;
+
 function mostrarApp(perfil) {
   document.getElementById('vista-login').classList.add('oculto');
   document.getElementById('vista-app').classList.remove('oculto');
   document.getElementById('sb-nombre-usuario').textContent = perfil.nombre_completo || perfil.username;
   document.getElementById('sb-rol-usuario').textContent = perfil.rol;
+  _rolActual = perfil.rol;
 
   if (perfil.rol === 'admin') {
     document.getElementById('nav-usuarios').classList.remove('oculto');
     document.getElementById('nav-apertura').classList.remove('oculto');
+  } else {
+    VISTAS_SOLO_ADMIN.forEach((v) => {
+      const btn = document.querySelector(`.nav-item[data-vista="${v}"]`);
+      if (btn) btn.classList.add('oculto');
+    });
   }
 
-  navegarA('dashboard');
+  navegarA(perfil.rol === 'admin' ? 'dashboard' : 'operaciones');
 }
 
 function mostrarLogin() {
@@ -42,6 +54,9 @@ function mostrarLogin() {
 }
 
 function navegarA(vista) {
+  if (_rolActual !== 'admin' && VISTAS_SOLO_ADMIN.includes(vista)) {
+    vista = 'operaciones'; // bloquea navegacion directa (ej: escribiendo la ruta a mano)
+  }
   document.querySelectorAll('.nav-item').forEach((btn) => {
     btn.classList.toggle('active', btn.dataset.vista === vista);
   });
