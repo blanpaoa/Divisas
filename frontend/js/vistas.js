@@ -1220,7 +1220,12 @@ async function cerrarElDia(e) {
     // chequeo final de exactamente $0.
     const existenciaTenencias = Object.values(motor.monedas || {}).reduce((s, p) => s + p.cantidad * p.costo_promedio, 0);
     const salidaTotal = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
-    const entradasTotal = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    // "entradas" se trajo ANTES de calcular el bruto fresco de ABONOS DE CUENTA
+    // TRANS VENEZUELA -- lo ajustamos aca para no depender de re-consultar
+    // (y para que el chequeo converja en un solo toque de "Cerrar el dia").
+    const abonosEnListaVieja = entradas.find((f) => f.concepto === 'ABONOS DE CUENTA TRANS, VENEZUELA');
+    const entradasTotalCrudo = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const entradasTotal = entradasTotalCrudo - (abonosEnListaVieja ? Number(abonosEnListaVieja.total_ars || 0) : 0) + abonosBrutoAcumulado;
     const existencia = existenciaTenencias + salidaTotal + moneygram;
     const debemosConFaltanteAyer = entradasTotal + utilidadCadivi + faltanteAcumAnterior + latin;
     const diferenciaDelDia = (existencia - debemosConFaltanteAyer) - total;
