@@ -357,8 +357,22 @@ const Api = {
   },
 
   /* ===================== MOTOR DE COSTEO (WAC) ===================== */
+  // Conceptos de Entradas que son "aditivos" (se suman, no reemplazan) y que
+  // el usuario confirmo que TAMBIEN mueven el pozo de pesos -- el incremento
+  // que se carga cada vez se suma solo, sin tener que cargarlo de nuevo en
+  // Movimientos de pesos. Debe coincidir con vistaEntradas.conceptosAditivos.
+  //
+  // OJO: solo aplica desde el 2026-08-25 en adelante. Para el 18 al 24/08
+  // (carga historica ya validada exacta contra la planilla real), estos
+  // conceptos NUNCA formaron parte de esa formula -- vienen de una tabla
+  // distinta (Entrada y Prest, cierre de caja) sin relacion matematica
+  // comprobada con el pozo de pesos para esos dias. Aplicar esto sin el
+  // corte de fecha duplicaria esos 6 dias.
+  _conceptosAditivosQueMuevenPesos: ['SOBRANTES DEL DIA', 'ABONOS DE CUENTA TRANS, VENEZUELA'],
+  _fechaDesdeQueAditivosMuevenPesos: '2026-08-25',
+
   async _motorPosiciones({ hasta } = {}) {
-    const [aperturaRes, operacionesRes, otrosSaldosRes, movimientosPesosRes, gastosRes, resumenRes] = await Promise.all([
+    const [aperturaRes, operacionesRes, otrosSaldosRes, movimientosPesosRes, gastosRes, resumenRes, entradasAditivasRes] = await Promise.all([
       supabaseClient.from('apertura_saldos').select('moneda_id, cantidad, costo_promedio'),
       supabaseClient
         .from('operaciones_cambio')
@@ -380,6 +394,11 @@ const Api = {
         .from('resumen_diario')
         .select('fecha, cadivi_dia_ars')
         .order('fecha', { ascending: true }),
+      supabaseClient
+        .from('entradas_prestamos')
+        .select('fecha, concepto, total_ars')
+        .order('fecha', { ascending: true })
+        .order('id', { ascending: true }),
     ]);
     if (aperturaRes.error) throw new Error(aperturaRes.error.message);
     if (operacionesRes.error) throw new Error(operacionesRes.error.message);
@@ -387,6 +406,7 @@ const Api = {
     if (movimientosPesosRes.error) throw new Error(movimientosPesosRes.error.message);
     if (gastosRes.error) throw new Error(gastosRes.error.message);
     if (resumenRes.error) throw new Error(resumenRes.error.message);
+    if (entradasAditivasRes.error) throw new Error(entradasAditivasRes.error.message);
 
     // moneda_id viene como numero desde Supabase; el motor identifica monedas por codigo
     // para las divisas extranjeras, y por separado calcula el pozo de pesos (ARS).
@@ -435,6 +455,31 @@ const Api = {
       if (!r.cadivi_dia_ars) return;
       otrosPorFecha[r.fecha] = otrosPorFecha[r.fecha] || { otras_salidas: 0, otras_entradas: 0 };
       otrosPorFecha[r.fecha].otras_entradas += Number(r.cadivi_dia_ars) || 0;
+    });
+    // Conceptos aditivos de Entradas: lo que se ve ahi es el TOTAL acumulado,
+    // no el incremento del dia -- el pozo de pesos necesita el incremento.
+    // Se calcula como la diferencia contra el registro anterior del mismo
+    // concepto (normalizado, para no depender del tipeo exacto), y solo se
+    // aplica desde _fechaDesdeQueAditivosMuevenPesos en adelante.
+    const normalizar = (s) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const aditivosNorm = this._conceptosAditivosQueMuevenPesos.map(normalizar);
+    const porConceptoAditivo = {};
+    entradasAditivasRes.data.forEach((r) => {
+      const key = normalizar(r.concepto);
+      if (!aditivosNorm.includes(key)) return;
+      porConceptoAditivo[key] = porConceptoAditivo[key] || [];
+      porConceptoAditivo[key].push(r);
+    });
+    Object.values(porConceptoAditivo).forEach((registros) => {
+      let anterior = 0;
+      registros.forEach((r) => {
+        const delta = Number(r.total_ars || 0) - anterior;
+        if (r.fecha >= this._fechaDesdeQueAditivosMuevenPesos) {
+          otrosPorFecha[r.fecha] = otrosPorFecha[r.fecha] || { otras_salidas: 0, otras_entradas: 0 };
+          otrosPorFecha[r.fecha].otras_entradas += delta;
+        }
+        anterior = Number(r.total_ars || 0);
+      });
     });
     const otrosPesosPorFecha = Object.entries(otrosPorFecha).map(([fecha, d]) => ({ fecha, ...d }));
     const saldoPesosPorFecha = window.MotorCosteo.calcularSaldoPesos(aperturaArs, operacionesRes.data, otrosPesosPorFecha);
