@@ -1633,27 +1633,30 @@ async function vistaPrestamos(contenedor) {
 // Crea/actualiza el renglon vigente en Entradas (si tipo='debemos') o Salidas
 // (si tipo='nos_deben') con el saldo pendiente actual del prestamo. El concepto
 // incluye el ID del prestamo para que cada uno tenga su propio renglon, sin
-// mezclarse con otros prestamos de la misma persona.
-async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente) {
+// mezclarse con otros prestamos de la misma persona. "fecha" es la fecha real
+// del movimiento (creacion del prestamo o del pago) -- antes usaba siempre
+// "hoy", por lo que no aparecia si el prestamo se cargaba con otra fecha.
+async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente, fecha) {
   const endpoint = prestamo.tipo === 'nos_deben' ? '/salidas' : '/entradas';
   const conceptoBase = prestamo.concepto ? prestamo.concepto : 'Prestamo';
   const concepto = prestamo.concepto_vinculado || `${prestamo.persona} - ${conceptoBase} #${prestamo.id}`;
   const moneda = Estado.monedas.find((m) => m.id === Number(prestamo.moneda_id));
   const esPesos = moneda && moneda.codigo === 'ARS';
+  const fechaMovimiento = fecha || prestamo.fecha || UI.hoy();
 
   let porcentaje = 0; // en pesos, "porcentaje" suma 0 -> total_ars = valor
   if (!esPesos) {
     // en moneda extranjera, "porcentaje" es la cotizacion que multiplica -- buscamos
     // la tasa del dia mas reciente para que el total_ars sea razonable
     try {
-      const tasa = await Api.buscarTasaMasReciente(UI.hoy(), prestamo.moneda_id);
+      const tasa = await Api.buscarTasaMasReciente(fechaMovimiento, prestamo.moneda_id);
       porcentaje = tasa || 1;
     } catch (err) {
       porcentaje = 1;
     }
   }
 
-  const body = { fecha: UI.hoy(), concepto, moneda_id: prestamo.moneda_id, valor: saldoPendiente, porcentaje };
+  const body = { fecha: fechaMovimiento, concepto, moneda_id: prestamo.moneda_id, valor: saldoPendiente, porcentaje };
   Object.assign(body, calcularTotalEntradaSalidaGasto(body));
   await Api.post(endpoint, body);
 }
@@ -1758,13 +1761,14 @@ function mostrarFormularioPago(prestamo) {
           onclick: async () => {
             try {
               const montoPago = Number(document.getElementById(idMonto).value) || 0;
+              const fechaPago = document.getElementById(idFecha).value;
               await Api.post('/pagos-prestamos', {
                 prestamo_id: prestamo.id,
                 monto: montoPago,
-                fecha: document.getElementById(idFecha).value,
+                fecha: fechaPago,
               });
               const nuevoSaldo = Math.max(0, prestamo.saldo_pendiente - montoPago);
-              await sincronizarPrestamoConEntradaSalida(prestamo, nuevoSaldo);
+              await sincronizarPrestamoConEntradaSalida(prestamo, nuevoSaldo, fechaPago);
               UI.toast('Pago registrado.');
               cargarPrestamos();
             } catch (err) {
