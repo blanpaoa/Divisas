@@ -1615,7 +1615,7 @@ async function vistaPrestamos(contenedor) {
       const { id } = await Api.post('/prestamos', {
         tipo, persona, moneda_id: monedaId, monto_original: montoOriginal, fecha, concepto,
       });
-      await sincronizarPrestamoConEntradaSalida({ id, tipo, persona, concepto, moneda_id: monedaId, fecha }, montoOriginal);
+      await sincronizarPrestamoConEntradaSalida({ id, tipo, persona, concepto, moneda_id: monedaId, fecha }, montoOriginal, fecha, montoOriginal);
 
       UI.toast('Prestamo guardado.');
       document.getElementById('form-prestamo').reset();
@@ -1636,7 +1636,15 @@ async function vistaPrestamos(contenedor) {
 // mezclarse con otros prestamos de la misma persona. "fecha" es la fecha real
 // del movimiento (creacion del prestamo o del pago) -- antes usaba siempre
 // "hoy", por lo que no aparecia si el prestamo se cargaba con otra fecha.
-async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente, fecha) {
+//
+// "montoMovimientoHoy" (opcional): el monto que fisicamente entro/salio de
+// la caja ESE dia (el monto original al crear el prestamo, o el monto del
+// pago puntual) -- distinto del saldo acumulado que se guarda en
+// Entradas/Salidas. Si se pasa, tambien se refleja en Movimientos de pesos,
+// confirmado por el usuario que un prestamo siempre es plata fisica.
+// Con salvaguarda de fecha (2025-08-25 en adelante) para no afectar los 6
+// dias historicos ya validados, donde esto nunca sumaba al pozo.
+async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente, fecha, montoMovimientoHoy) {
   const endpoint = prestamo.tipo === 'nos_deben' ? '/salidas' : '/entradas';
   const conceptoBase = prestamo.concepto ? prestamo.concepto : 'Prestamo';
   const concepto = prestamo.concepto_vinculado || `${prestamo.persona} - ${conceptoBase} #${prestamo.id}`;
@@ -1645,12 +1653,14 @@ async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente, fec
   const fechaMovimiento = fecha || prestamo.fecha || UI.hoy();
 
   let porcentaje = 0; // en pesos, "porcentaje" suma 0 -> total_ars = valor
+  let tasaParaConvertir = 1;
   if (!esPesos) {
     // en moneda extranjera, "porcentaje" es la cotizacion que multiplica -- buscamos
     // la tasa del dia mas reciente para que el total_ars sea razonable
     try {
       const tasa = await Api.buscarTasaMasReciente(fechaMovimiento, prestamo.moneda_id);
       porcentaje = tasa || 1;
+      tasaParaConvertir = porcentaje;
     } catch (err) {
       porcentaje = 1;
     }
@@ -1659,6 +1669,27 @@ async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente, fec
   const body = { fecha: fechaMovimiento, concepto, moneda_id: prestamo.moneda_id, valor: saldoPendiente, porcentaje };
   Object.assign(body, calcularTotalEntradaSalidaGasto(body));
   await Api.post(endpoint, body);
+
+  const FECHA_DESDE_PRESTAMOS_MUEVEN_PESOS = '2026-08-25';
+  if (montoMovimientoHoy && fechaMovimiento >= FECHA_DESDE_PRESTAMOS_MUEVEN_PESOS) {
+    // nos_deben (prestamos que damos) = sale plata; debemos (prestamos que recibimos) = entra plata.
+    // Un pago es al reves: si nos_deben y nos pagan, ENTRA plata; si debemos y pagamos, SALE plata.
+    const esCreacion = Number(montoMovimientoHoy) === Number(saldoPendiente);
+    let tipoMov;
+    if (esCreacion) {
+      tipoMov = prestamo.tipo === 'nos_deben' ? 'salida' : 'entrada';
+    } else {
+      tipoMov = prestamo.tipo === 'nos_deben' ? 'entrada' : 'salida';
+    }
+    const montoArs = esPesos ? montoMovimientoHoy : montoMovimientoHoy * tasaParaConvertir;
+    await Api.post('/movimientos-pesos', {
+      fecha: fechaMovimiento,
+      tipo: tipoMov,
+      concepto: 'OTROS',
+      monto: montoArs,
+      observaciones: `Prestamo: ${prestamo.persona} - ${conceptoBase} #${prestamo.id}`,
+    });
+  }
 }
 
 async function cargarPrestamos() {
@@ -1781,7 +1812,7 @@ function mostrarFormularioPago(prestamo) {
                 fecha: fechaPago,
               });
               const nuevoSaldo = Math.max(0, prestamo.saldo_pendiente - montoPago);
-              await sincronizarPrestamoConEntradaSalida(prestamo, nuevoSaldo, fechaPago);
+              await sincronizarPrestamoConEntradaSalida(prestamo, nuevoSaldo, fechaPago, montoPago);
               UI.toast('Pago registrado.');
               cargarPrestamos();
             } catch (err) {
@@ -2024,6 +2055,25 @@ async function cargarCierreCompleto() {
       { key: 'costo_promedio', label: 'Costo promedio', render: (f) => UI.formatoNumero(f.costo_promedio) },
       { key: 'total_ars', label: 'Valor ARS', render: (f) => UI.formatoARS(f.total_ars) },
     ], filasTenencias, 'total_ars'));
+
+    // ---- Utilidades (desglose por moneda de la utilidad de compra/venta del dia) ----
+    const filasUtilidades = Object.entries(motor.utilidadPorMoneda || {})
+      .map(([id, utilidad]) => {
+        const cantidad = (motor.cantidadVendidaPorMoneda || {})[id] || 0;
+        return {
+          moneda: Estado.nombreMoneda(id),
+          valor: cantidad,
+          porcentaje: cantidad !== 0 ? utilidad / cantidad : 0,
+          total: utilidad,
+        };
+      })
+      .filter((f) => Math.abs(f.total) > 0.0001);
+    cont.appendChild(panelTabla('📈 Utilidades', [
+      { key: 'moneda', label: 'Monedas' },
+      { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
+      { key: 'porcentaje', label: '%', render: (f) => UI.formatoNumero(f.porcentaje) },
+      { key: 'total', label: 'Total', render: (f) => UI.formatoARS(f.total) },
+    ], filasUtilidades, 'total'));
 
     // ---- Compra / Venta del dia ----
     cont.appendChild(panelTabla('🔄 Compra / Venta del día', [

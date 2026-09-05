@@ -31,6 +31,7 @@ function calcularPosiciones(aperturas, operaciones) {
   for (const fecha of fechas) {
     const ops = porFecha[fecha];
     const utilidadPorMoneda = {};
+    const cantidadVendidaPorMoneda = {};
 
     // 1) compras primero
     ops.filter((o) => o.tipo === 'compra').forEach((o) => {
@@ -47,6 +48,7 @@ function calcularPosiciones(aperturas, operaciones) {
       const pos = posiciones[o.moneda_id] || { cantidad: 0, costo_promedio: 0 };
       const utilidad = Number(o.cantidad) * (Number(o.cotizacion) - pos.costo_promedio);
       utilidadPorMoneda[o.moneda_id] = (utilidadPorMoneda[o.moneda_id] || 0) + utilidad;
+      cantidadVendidaPorMoneda[o.moneda_id] = (cantidadVendidaPorMoneda[o.moneda_id] || 0) + Number(o.cantidad);
       posiciones[o.moneda_id] = { cantidad: pos.cantidad - Number(o.cantidad), costo_promedio: pos.costo_promedio };
     });
 
@@ -57,7 +59,12 @@ function calcularPosiciones(aperturas, operaciones) {
     });
     Object.values(utilidadPorMoneda).forEach((u) => { utilidad_total += u; });
 
-    resultado[fecha] = { monedas: snapshot, utilidad_por_moneda: utilidadPorMoneda, utilidad_total };
+    resultado[fecha] = {
+      monedas: snapshot,
+      utilidad_por_moneda: utilidadPorMoneda,
+      cantidad_vendida_por_moneda: cantidadVendidaPorMoneda,
+      utilidad_total,
+    };
   }
 
   return resultado;

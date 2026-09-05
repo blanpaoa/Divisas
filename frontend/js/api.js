@@ -497,6 +497,7 @@ const Api = {
       monedas: monedasConPesos,
       utilidadDelDia: ultimaFecha ? resultado[ultimaFecha].utilidad_total : 0,
       utilidadPorMoneda: ultimaFecha ? resultado[ultimaFecha].utilidad_por_moneda : {},
+      cantidadVendidaPorMoneda: ultimaFecha ? resultado[ultimaFecha].cantidad_vendida_por_moneda : {},
       historial: fechasHasta.map((f) => ({ fecha: f, utilidad_total: resultado[f].utilidad_total })),
     };
   },
