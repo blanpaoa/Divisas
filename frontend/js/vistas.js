@@ -1727,9 +1727,22 @@ async function cargarPrestamos() {
         }, '📜'),
         UI.el('button', {
           onclick: async () => {
-            if (!confirm('¿Eliminar este prestamo y todos sus pagos?')) return;
+            if (!confirm('¿Eliminar este prestamo, todos sus pagos, y el renglon asociado en Entradas/Salidas?')) return;
             try {
               await Api.delete(`/prestamos/${p.id}`);
+              // Tambien borramos el/los renglones de Entradas o Salidas que este
+              // prestamo genero (identificados por "#ID" en el concepto) -- para
+              // no dejar un renglon huerfano fechado mal. Los prestamos IMPORTADOS
+              // (con concepto_vinculado a un renglon preexistente) no se tocan --
+              // ese renglon no le pertenece al prestamo, ya existia antes.
+              if (!p.concepto_vinculado) {
+                const endpoint = p.tipo === 'nos_deben' ? '/salidas' : '/entradas';
+                const todas = await Api.get(endpoint, { desde: '2000-01-01', hasta: UI.haceDias(-3650) });
+                const propios = todas.filter((r) => (r.concepto || '').includes(`#${p.id}`));
+                for (const r of propios) {
+                  await Api.delete(`${endpoint}/${r.id}`);
+                }
+              }
               UI.toast('Prestamo eliminado.');
               cargarPrestamos();
             } catch (err) {
