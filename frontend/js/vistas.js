@@ -721,9 +721,10 @@ const vistaSalidas = crearVistaCrud({
   titulo: '⬆️ Salidas / prestamos otorgados',
   endpoint: '/salidas',
   esEstadoQueArrastra: true,
+  conceptosAditivos: ['FALTANTES FISICOS'],
   campos: [
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
-    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: CONCEPTOS_SUGERIDOS },
+    { key: 'concepto', label: 'Concepto', type: 'text', default: () => '', sugerencias: [...CONCEPTOS_SUGERIDOS, 'FALTANTES FISICOS'] },
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'valor', label: 'Valor', type: 'number', default: () => 0 },
     { key: 'porcentaje', label: 'Segundo monto (si es pesos) / Cotizacion (si es otra moneda)', type: 'number', default: () => 0 },
@@ -2068,10 +2069,14 @@ async function cargarCierreCompleto() {
         };
       })
       .filter((f) => Math.abs(f.total) > 0.0001);
+    const cadiviDiaHoy = resumen ? Number(resumen.cadivi_dia_ars || 0) : 0;
+    if (Math.abs(cadiviDiaHoy) > 0.0001) {
+      filasUtilidades.push({ moneda: 'UTILIDAD VENEZUELA', valor: '', porcentaje: '', total: cadiviDiaHoy });
+    }
     cont.appendChild(panelTabla('📈 Utilidades', [
       { key: 'moneda', label: 'Monedas' },
-      { key: 'valor', label: 'Valor', render: (f) => UI.formatoNumero(f.valor) },
-      { key: 'porcentaje', label: '%', render: (f) => UI.formatoNumero(f.porcentaje) },
+      { key: 'valor', label: 'Valor', render: (f) => (f.valor === '' ? '' : UI.formatoNumero(f.valor)) },
+      { key: 'porcentaje', label: '%', render: (f) => (f.porcentaje === '' ? '' : UI.formatoNumero(f.porcentaje)) },
       { key: 'total', label: 'Total', render: (f) => UI.formatoARS(f.total) },
     ], filasUtilidades, 'total'));
 
@@ -2132,10 +2137,12 @@ async function cargarCierreCompleto() {
         '⚠ Todavía no se guardó "Otros saldos" para este día — estos son valores sugeridos calculados en base al día anterior y a Movimientos de pesos. Entrá a Cierre diario y guardalos para que queden fijos.'));
     }
     const gridOtros = UI.el('div', { class: 'cards-grid' });
+    const balanceLatin = Number(o.moneygram_nos_debe_ars || 0) - Number(o.latin_debemos_ars || 0);
     [
-      ['Latin Express — les debemos', o.latin_debemos_ars],
-      ['MoneyGram — nos deben', o.moneygram_nos_debe_ars],
-      ['Debo a Venezuela', o.debo_venezuela_ars],
+      ['MONEYGRAM DEBITO', o.latin_debemos_ars],
+      ['MONEYGRAM CREDITO', o.moneygram_nos_debe_ars],
+      ['BALANCE LATIN', balanceLatin],
+      ['DINERO CUENTA VENEZUELA', o.debo_venezuela_ars],
     ].forEach(([label, valor]) => {
       gridOtros.appendChild(UI.el('div', { class: 'stat-card' }, [
         UI.el('div', { class: 'label' }, label),

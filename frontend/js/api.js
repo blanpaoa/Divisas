@@ -368,10 +368,11 @@ const Api = {
   // comprobada con el pozo de pesos para esos dias. Aplicar esto sin el
   // corte de fecha duplicaria esos 6 dias.
   _conceptosAditivosQueMuevenPesos: ['SOBRANTES DEL DIA'],
+  _conceptosAditivosSalidaQueMuevenPesos: ['FALTANTES FISICOS'],
   _fechaDesdeQueAditivosMuevenPesos: '2026-08-25',
 
   async _motorPosiciones({ hasta } = {}) {
-    const [aperturaRes, operacionesRes, otrosSaldosRes, movimientosPesosRes, gastosRes, resumenRes, entradasAditivasRes] = await Promise.all([
+    const [aperturaRes, operacionesRes, otrosSaldosRes, movimientosPesosRes, gastosRes, resumenRes, entradasAditivasRes, salidasAditivasRes] = await Promise.all([
       supabaseClient.from('apertura_saldos').select('moneda_id, cantidad, costo_promedio'),
       supabaseClient
         .from('operaciones_cambio')
@@ -398,6 +399,11 @@ const Api = {
         .select('fecha, concepto, total_ars')
         .order('fecha', { ascending: true })
         .order('id', { ascending: true }),
+      supabaseClient
+        .from('salidas_prestamos')
+        .select('fecha, concepto, total_ars')
+        .order('fecha', { ascending: true })
+        .order('id', { ascending: true }),
     ]);
     if (aperturaRes.error) throw new Error(aperturaRes.error.message);
     if (operacionesRes.error) throw new Error(operacionesRes.error.message);
@@ -406,6 +412,7 @@ const Api = {
     if (gastosRes.error) throw new Error(gastosRes.error.message);
     if (resumenRes.error) throw new Error(resumenRes.error.message);
     if (entradasAditivasRes.error) throw new Error(entradasAditivasRes.error.message);
+    if (salidasAditivasRes.error) throw new Error(salidasAditivasRes.error.message);
 
     // moneda_id viene como numero desde Supabase; el motor identifica monedas por codigo
     // para las divisas extranjeras, y por separado calcula el pozo de pesos (ARS).
@@ -476,6 +483,28 @@ const Api = {
         if (r.fecha >= this._fechaDesdeQueAditivosMuevenPesos) {
           otrosPorFecha[r.fecha] = otrosPorFecha[r.fecha] || { otras_salidas: 0, otras_entradas: 0 };
           otrosPorFecha[r.fecha].otras_entradas += delta;
+        }
+        anterior = Number(r.total_ars || 0);
+      });
+    });
+
+    // Lo mismo pero para conceptos aditivos de SALIDAS (ej: FALTANTES FISICOS)
+    // -- el incremento resta del pozo, en vez de sumar.
+    const aditivosSalidaNorm = this._conceptosAditivosSalidaQueMuevenPesos.map(normalizar);
+    const porConceptoAditivoSalida = {};
+    salidasAditivasRes.data.forEach((r) => {
+      const key = normalizar(r.concepto);
+      if (!aditivosSalidaNorm.includes(key)) return;
+      porConceptoAditivoSalida[key] = porConceptoAditivoSalida[key] || [];
+      porConceptoAditivoSalida[key].push(r);
+    });
+    Object.values(porConceptoAditivoSalida).forEach((registros) => {
+      let anterior = 0;
+      registros.forEach((r) => {
+        const delta = Number(r.total_ars || 0) - anterior;
+        if (r.fecha >= this._fechaDesdeQueAditivosMuevenPesos) {
+          otrosPorFecha[r.fecha] = otrosPorFecha[r.fecha] || { otras_salidas: 0, otras_entradas: 0 };
+          otrosPorFecha[r.fecha].otras_salidas += delta;
         }
         anterior = Number(r.total_ars || 0);
       });
