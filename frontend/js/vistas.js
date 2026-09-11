@@ -198,6 +198,13 @@ async function cargarDashboard() {
    ====================================================================== */
 
 // campos: [{ key, label, type: 'text'|'number'|'date'|'select-moneda'|'select', options, default }]
+// Solo el admin puede eliminar registros -- el operador puede cargar/editar
+// (segun cfg.soloEscritura de cada pantalla) pero nunca borrar. Se usa en
+// todos los botones de eliminar de la app.
+function esAdmin() {
+  return (Api.getUsuario() || {}).rol === 'admin';
+}
+
 function crearVistaCrud(cfg) {
   return async function (contenedor) {
     await Estado.cargarMonedas();
@@ -299,6 +306,17 @@ function crearVistaCrud(cfg) {
           body[c.key] = val;
         });
         if (cfg.calcularTotal) Object.assign(body, cfg.calcularTotal(body));
+
+        // Validacion opcional antes de guardar (ej: limites de cotizacion en
+        // Compra/Venta). Si devuelve un mensaje de error (string), se corta
+        // el guardado y se muestra ese mensaje.
+        if (cfg.validar) {
+          const errorValidacion = await cfg.validar(body);
+          if (errorValidacion) {
+            UI.toast(errorValidacion, 'error');
+            return;
+          }
+        }
 
         // Conceptos aditivos (ej: "Sobrantes del dia", "Abono cuentas Venezuela"):
         // en vez de reemplazar el valor vigente, lo que se carga se SUMA al
@@ -459,7 +477,7 @@ async function cargarTablaCrud(cfg, puedeEscribir) {
   }
 
   const encabezados = cfg.columnas.map((c) => UI.el('th', {}, c.label));
-  if (puedeEscribir) encabezados.push(UI.el('th', {}, ''));
+  if (puedeEscribir && esAdmin()) encabezados.push(UI.el('th', {}, ''));
   const table = UI.el('table', {}, [UI.el('thead', {}, UI.el('tr', {}, encabezados))]);
   const tbody = UI.el('tbody');
   filas.forEach((fila) => {
@@ -469,7 +487,7 @@ async function cargarTablaCrud(cfg, puedeEscribir) {
       }
       return UI.el('td', {}, c.render ? c.render(fila) : String(fila[c.key] ?? ''));
     });
-    if (puedeEscribir) {
+    if (puedeEscribir && esAdmin()) {
       const btnBorrar = UI.el('button', {
         onclick: async () => {
           if (!confirm('¿Eliminar este registro?')) return;
@@ -662,6 +680,24 @@ const vistaOperaciones = crearVistaCrud({
   ],
   calcularTotal: (body) => ({ total_ars: Number(body.cantidad) * Number(body.cotizacion) }),
   autocompletarCotizacion: { campoFecha: 'fecha', campoMoneda: 'moneda_id', campoCotizacion: 'cotizacion' },
+  validar: async (body) => {
+    try {
+      const limites = await Api.buscarLimitesTasa(body.fecha, body.moneda_id);
+      if (!limites) return null; // no hay tasa cargada para esa moneda -- no se puede validar, se permite
+      const cot = Number(body.cotizacion);
+      const min = Number(limites.valor_minimo) || 0;
+      const max = Number(limites.valor_maximo) || 0;
+      if (min > 0 && cot < min) {
+        return `La cotización (${cot}) es menor al mínimo permitido (${min}) para esa moneda ese día.`;
+      }
+      if (max > 0 && cot > max) {
+        return `La cotización (${cot}) es mayor al máximo permitido (${max}) para esa moneda ese día.`;
+      }
+      return null;
+    } catch (err) {
+      return null; // si falla la consulta, no bloqueamos el guardado por un error de red
+    }
+  },
   columnas: [
     { key: 'fecha', label: 'Fecha' },
     { key: 'tipo', label: 'Tipo', html: true, render: (f) => `<span class="badge ${f.tipo}">${f.tipo.toUpperCase()}</span>` },
@@ -1054,7 +1090,7 @@ async function cargarTransferencias() {
       UI.el('td', {}, UI.formatoNumero(t.valor)),
       UI.el('td', {}, t.referencia || ''),
       UI.el('td', {}, t.notas || ''),
-      UI.el('td', { class: 'table-actions' }, UI.el('button', {
+      UI.el('td', { class: 'table-actions' }, esAdmin() ? UI.el('button', {
         onclick: async () => {
           if (!confirm('¿Eliminar este movimiento?')) return;
           try {
@@ -1065,7 +1101,7 @@ async function cargarTransferencias() {
             UI.toast(err.message, 'error');
           }
         },
-      }, '🗑️')),
+      }, '🗑️') : ''),
     ]));
   });
   table.appendChild(tbody);
@@ -1082,12 +1118,16 @@ const vistaTasas = crearVistaCrud({
     { key: 'fecha', label: 'Fecha', type: 'date', default: () => UI.hoy() },
     { key: 'moneda_id', label: 'Moneda', type: 'select-moneda' },
     { key: 'cotizacion', label: 'Cotizacion (a ARS)', type: 'number', default: () => 0 },
+    { key: 'valor_minimo', label: 'Valor minimo permitido', type: 'number', default: () => 0 },
+    { key: 'valor_maximo', label: 'Valor maximo permitido', type: 'number', default: () => 0 },
   ],
   calcularTotal: () => ({}),
   columnas: [
     { key: 'fecha', label: 'Fecha' },
     { key: 'moneda_codigo', label: 'Moneda' },
     { key: 'cotizacion', label: 'Cotizacion', render: (f) => UI.formatoNumero(f.cotizacion) },
+    { key: 'valor_minimo', label: 'Minimo', render: (f) => UI.formatoNumero(f.valor_minimo) },
+    { key: 'valor_maximo', label: 'Maximo', render: (f) => UI.formatoNumero(f.valor_maximo) },
   ],
 });
 
@@ -1592,8 +1632,14 @@ async function vistaPrestamos(contenedor) {
             <option value="pagado">Pagado</option>
           </select>
         </div>
+        <div>
+          <label>Persona</label>
+          <input type="text" id="f-persona" list="lista-personas" placeholder="Todas" />
+          <datalist id="lista-personas"></datalist>
+        </div>
         <button class="btn-secondary" id="f-aplicar">Filtrar</button>
       </div>
+      <div id="pr-total-persona" style="margin-bottom:12px;"></div>
       <div id="pr-tabla-wrap"></div>
     </div>
   `;
@@ -1628,6 +1674,7 @@ async function vistaPrestamos(contenedor) {
   });
 
   document.getElementById('f-aplicar').addEventListener('click', cargarPrestamos);
+  document.getElementById('f-persona').addEventListener('change', cargarPrestamos);
   await cargarPrestamos();
 }
 
@@ -1696,16 +1743,54 @@ async function sincronizarPrestamoConEntradaSalida(prestamo, saldoPendiente, fec
 async function cargarPrestamos() {
   const tipo = document.getElementById('f-tipo').value;
   const estado = document.getElementById('f-estado').value;
+  const personaFiltro = document.getElementById('f-persona').value.trim().toLowerCase();
   const resumenWrap = document.getElementById('pr-resumen');
   const tablaWrap = document.getElementById('pr-tabla-wrap');
+  const totalPersonaWrap = document.getElementById('pr-total-persona');
   tablaWrap.innerHTML = '<div class="empty-state">Cargando...</div>';
 
-  let prestamos;
+  let prestamosTodos;
   try {
-    prestamos = await Api.get('/prestamos', { tipo, estado });
+    prestamosTodos = await Api.get('/prestamos', { tipo, estado });
   } catch (err) {
     tablaWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
     return;
+  }
+
+  // Autocompletar la lista de personas conocidas (sin duplicados)
+  const listaPersonas = document.getElementById('lista-personas');
+  listaPersonas.innerHTML = '';
+  [...new Set(prestamosTodos.map((p) => p.persona))].sort().forEach((persona) => {
+    listaPersonas.appendChild(UI.el('option', { value: persona }));
+  });
+
+  const prestamos = personaFiltro
+    ? prestamosTodos.filter((p) => (p.persona || '').toLowerCase().includes(personaFiltro))
+    : prestamosTodos;
+
+  // Total de lo que debe/le deben a esa persona (solo si hay un filtro de persona activo)
+  totalPersonaWrap.innerHTML = '';
+  if (personaFiltro) {
+    const totalPorPersona = {}; // `${tipo}|${moneda_codigo}` -> total
+    prestamos.forEach((p) => {
+      if (p.estado === 'pagado') return;
+      const key = `${p.tipo}|${p.moneda_codigo}`;
+      totalPorPersona[key] = (totalPorPersona[key] || 0) + p.saldo_pendiente;
+    });
+    const entradasPersona = Object.entries(totalPorPersona);
+    if (entradasPersona.length === 0) {
+      totalPersonaWrap.appendChild(UI.el('div', { class: 'empty-state' }, 'Sin saldos pendientes para esa persona.'));
+    } else {
+      const grid = UI.el('div', { class: 'cards-grid' });
+      entradasPersona.forEach(([key, total]) => {
+        const [tipoKey, monedaCodigo] = key.split('|');
+        grid.appendChild(UI.el('div', { class: 'stat-card' }, [
+          UI.el('div', { class: 'label' }, `${tipoKey === 'nos_deben' ? 'Nos debe' : 'Le debemos'} (${monedaCodigo})`),
+          UI.el('div', { class: `value ${tipoKey === 'nos_deben' ? 'positivo' : 'negativo'}` }, UI.formatoNumero(total)),
+        ]));
+      });
+      totalPersonaWrap.appendChild(grid);
+    }
   }
 
   // Resumen de saldos pendientes por moneda y tipo
@@ -1757,7 +1842,7 @@ async function cargarPrestamos() {
         UI.el('button', {
           onclick: () => mostrarHistorialPagos(p),
         }, '📜'),
-        UI.el('button', {
+        ...(esAdmin() ? [UI.el('button', {
           onclick: async () => {
             if (!confirm('¿Eliminar este prestamo, todos sus pagos, y el renglon asociado en Entradas/Salidas?')) return;
             try {
@@ -1781,7 +1866,7 @@ async function cargarPrestamos() {
               UI.toast(err.message, 'error');
             }
           },
-        }, '🗑️'),
+        }, '🗑️')] : []),
       ]),
     ]));
   });
@@ -1845,13 +1930,13 @@ async function mostrarHistorialPagos(prestamo) {
         UI.el('tbody', {}, pagos.map((pg) => UI.el('tr', {}, [
           UI.el('td', {}, pg.fecha),
           UI.el('td', {}, UI.formatoNumero(pg.monto)),
-          UI.el('td', {}, UI.el('button', {
+          UI.el('td', {}, esAdmin() ? UI.el('button', {
             onclick: async () => {
               if (!confirm('¿Eliminar este pago?')) return;
               await Api.delete(`/pagos-prestamos/${pg.id}`);
               cargarPrestamos();
             },
-          }, '🗑️')),
+          }, '🗑️') : ''),
         ]))),
       ]);
 
@@ -2070,9 +2155,7 @@ async function cargarCierreCompleto() {
       })
       .filter((f) => Math.abs(f.total) > 0.0001);
     const cadiviDiaHoy = resumen ? Number(resumen.cadivi_dia_ars || 0) : 0;
-    if (Math.abs(cadiviDiaHoy) > 0.0001) {
-      filasUtilidades.push({ moneda: 'UTILIDAD VENEZUELA', valor: '', porcentaje: '', total: cadiviDiaHoy });
-    }
+    filasUtilidades.push({ moneda: 'UTILIDAD VENEZUELA', valor: '', porcentaje: '', total: cadiviDiaHoy });
     cont.appendChild(panelTabla('📈 Utilidades', [
       { key: 'moneda', label: 'Monedas' },
       { key: 'valor', label: 'Valor', render: (f) => (f.valor === '' ? '' : UI.formatoNumero(f.valor)) },

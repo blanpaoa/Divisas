@@ -303,6 +303,22 @@ const Api = {
     return data ? data.cotizacion : null;
   },
 
+  // Igual que buscarTasaMasReciente, pero tambien trae los limites minimo/
+  // maximo cargados para esa moneda -- usado para validar Compra/Venta antes
+  // de guardar (no dejar cargar una cotizacion fuera de rango).
+  async buscarLimitesTasa(fecha, monedaId) {
+    const { data, error } = await supabaseClient
+      .from('tasas_diarias')
+      .select('cotizacion, valor_minimo, valor_maximo')
+      .eq('moneda_id', monedaId)
+      .lte('fecha', fecha)
+      .order('fecha', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data || null;
+  },
+
   /* ===================== PRESTAMOS (con saldo y estado) ===================== */
   async _listarPrestamosConSaldo({ tipo, estado } = {}) {
     let query = supabaseClient
