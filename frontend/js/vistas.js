@@ -960,12 +960,10 @@ async function vistaTransferencias(contenedor) {
         <div><label>Fecha</label><input type="date" id="tr-fecha" value="${UI.hoy()}" /></div>
         <div>
           <label>Destino</label>
-          <input type="text" id="tr-destino" list="tr-destinos-sugeridos" value="COLOMBIA" />
-          <datalist id="tr-destinos-sugeridos">
-            <option value="COLOMBIA"></option>
-            <option value="VENEZUELA - BBVA"></option>
-            <option value="Venezuela"></option>
-          </datalist>
+          <select id="tr-destino">
+            <option value="Colombia">Colombia</option>
+            <option value="Venezuela">Venezuela</option>
+          </select>
         </div>
         <div id="tr-campos-simples" class="form-grid" style="display:contents;">
         <div>
@@ -1022,6 +1020,10 @@ async function vistaTransferencias(contenedor) {
           <div><label>Total (Bs)</label><input type="text" id="vz-total-bs" readonly value="0" /></div>
         </div>
         <button class="btn-primary" id="vz-confirmar-btn">Confirmar transferencia a Venezuela</button>
+        <div style="margin-top:20px;">
+          <h4>Historial de transferencias a Venezuela</h4>
+          <div id="vz-historial-wrap"></div>
+        </div>
       </div>
     </div>
 
@@ -1144,6 +1146,41 @@ function inicializarFormularioVenezuela() {
   tasaInput.addEventListener('input', () => { limitarDecimal(tasaInput, 16, 4); recalcularTotalBs(); });
 
   document.getElementById('vz-confirmar-btn').addEventListener('click', mostrarModalConfirmacionVenezuela);
+  cargarHistorialTransferenciasVenezuela();
+}
+
+async function cargarHistorialTransferenciasVenezuela() {
+  const wrap = document.getElementById('vz-historial-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="empty-state">Cargando...</div>';
+  try {
+    const filas = await Api.listarTransferenciasVenezuela({});
+    if (filas.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">Sin transferencias a Venezuela cargadas todavia.</div>';
+      return;
+    }
+    const table = UI.el('table', {}, [
+      UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Cliente', 'Beneficiario', 'Valor ARS', 'Tasa', 'Total Bs'].map((h) => UI.el('th', {}, h)))),
+    ]);
+    const tbody = UI.el('tbody');
+    filas.forEach((f) => {
+      const cliente = f.clientes_venezuela ? `${f.clientes_venezuela.nombre} (${f.clientes_venezuela.documento})` : '-';
+      const benef = f.beneficiarios_venezuela ? `${f.beneficiarios_venezuela.nombre} (${f.beneficiarios_venezuela.tipo_documento} ${f.beneficiarios_venezuela.documento})` : '-';
+      tbody.appendChild(UI.el('tr', {}, [
+        UI.el('td', {}, f.fecha),
+        UI.el('td', {}, cliente),
+        UI.el('td', {}, benef),
+        UI.el('td', {}, UI.formatoARS(f.valor_ars)),
+        UI.el('td', {}, UI.formatoNumero(f.tasa)),
+        UI.el('td', {}, UI.formatoNumero(f.total_bs)),
+      ]));
+    });
+    table.appendChild(tbody);
+    wrap.innerHTML = '';
+    wrap.appendChild(table);
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+  }
 }
 
 function seleccionarClienteVenezuela(cliente) {
@@ -1262,6 +1299,7 @@ function mostrarModalConfirmacionVenezuela() {
             _vzClienteSeleccionado = null;
             _vzBeneficiarioSeleccionadoId = null;
             document.getElementById('vz-beneficiarios-existentes').innerHTML = '';
+            cargarHistorialTransferenciasVenezuela();
           } catch (err) {
             UI.toast(err.message, 'error');
           }
@@ -2395,8 +2433,8 @@ async function cargarCierreCompleto() {
         };
       })
       .filter((f) => Math.abs(f.total) > 0.0001);
-    const cadiviDiaHoy = resumen ? Number(resumen.cadivi_dia_ars || 0) : 0;
-    filasUtilidades.push({ moneda: 'UTILIDAD VENEZUELA', valor: '', porcentaje: '', total: cadiviDiaHoy });
+    const cadiviAcumuladoHoy = resumen ? Number(resumen.utilidad_cadivi_ars || 0) : 0;
+    filasUtilidades.push({ moneda: 'UTILIDAD VENEZUELA', valor: '', porcentaje: '', total: cadiviAcumuladoHoy });
     cont.appendChild(panelTabla('📈 Utilidades', [
       { key: 'moneda', label: 'Monedas' },
       { key: 'valor', label: 'Valor', render: (f) => (f.valor === '' ? '' : UI.formatoNumero(f.valor)) },
