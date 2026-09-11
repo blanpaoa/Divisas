@@ -319,6 +319,74 @@ const Api = {
     return data || null;
   },
 
+  /* ===================== TRANSFERENCIAS VENEZUELA (Cliente + Beneficiario) ===================== */
+  // Autocompletar cliente por documento (3+ caracteres)
+  async buscarClientesVenezuela(prefijoDocumento) {
+    const { data, error } = await supabaseClient
+      .from('clientes_venezuela')
+      .select('*')
+      .ilike('documento', `${prefijoDocumento}%`)
+      .order('documento', { ascending: true })
+      .limit(10);
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  async listarBeneficiariosDeCliente(clienteId) {
+    const { data, error } = await supabaseClient
+      .from('beneficiarios_venezuela')
+      .select('*')
+      .eq('cliente_id', clienteId)
+      .order('nombre', { ascending: true });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  async crearClienteVenezuela({ documento, nombre, direccion, telefono }) {
+    const usuario = this.getUsuario();
+    const { data, error } = await supabaseClient
+      .from('clientes_venezuela')
+      .insert({ documento, nombre, direccion, telefono, usuario_id: usuario ? usuario.id : null })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async crearBeneficiarioVenezuela({ cliente_id, tipo_documento, documento, nombre, direccion, banco, cuenta }) {
+    const usuario = this.getUsuario();
+    const { data, error } = await supabaseClient
+      .from('beneficiarios_venezuela')
+      .insert({ cliente_id, tipo_documento, documento, nombre, direccion, banco, cuenta, usuario_id: usuario ? usuario.id : null })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async crearTransferenciaVenezuela({ fecha, cliente_id, beneficiario_id, valor_ars, tasa, total_bs }) {
+    const usuario = this.getUsuario();
+    const { data, error } = await supabaseClient
+      .from('transferencias_venezuela')
+      .insert({ fecha, cliente_id, beneficiario_id, valor_ars, tasa, total_bs, usuario_id: usuario ? usuario.id : null })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data;
+  },
+
+  async listarTransferenciasVenezuela({ desde, hasta } = {}) {
+    let query = supabaseClient
+      .from('transferencias_venezuela')
+      .select('*, clientes_venezuela(documento,nombre), beneficiarios_venezuela(nombre,documento,tipo_documento,banco,cuenta)')
+      .order('fecha', { ascending: false });
+    if (desde) query = query.gte('fecha', desde);
+    if (hasta) query = query.lte('fecha', hasta);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
   /* ===================== PRESTAMOS (con saldo y estado) ===================== */
   async _listarPrestamosConSaldo({ tipo, estado } = {}) {
     let query = supabaseClient

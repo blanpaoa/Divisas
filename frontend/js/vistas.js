@@ -683,7 +683,7 @@ const vistaOperaciones = crearVistaCrud({
   validar: async (body) => {
     try {
       const limites = await Api.buscarLimitesTasa(body.fecha, body.moneda_id);
-      if (!limites) return null; // no hay tasa cargada para esa moneda -- no se puede validar, se permite
+      if (!limites) return 'No hay Tasa del día cargada para esa moneda en esa fecha (o una fecha anterior). Cargala primero en "Tasa del día".';
       const cot = Number(body.cotizacion);
       const min = Number(limites.valor_minimo) || 0;
       const max = Number(limites.valor_maximo) || 0;
@@ -964,8 +964,10 @@ async function vistaTransferencias(contenedor) {
           <datalist id="tr-destinos-sugeridos">
             <option value="COLOMBIA"></option>
             <option value="VENEZUELA - BBVA"></option>
+            <option value="Venezuela"></option>
           </datalist>
         </div>
+        <div id="tr-campos-simples" class="form-grid" style="display:contents;">
         <div>
           <label>Tipo</label>
           <select id="tr-tipo">
@@ -980,7 +982,47 @@ async function vistaTransferencias(contenedor) {
         <div><label>Referencia (Nº cuenta/transaccion, opcional)</label><input type="text" id="tr-referencia" /></div>
         <div class="form-row-full"><label>Notas</label><input type="text" id="tr-notas" /></div>
         <div class="form-row-full"><button type="submit" class="btn-primary">Guardar</button></div>
+        </div>
       </form>
+
+      <div id="form-venezuela-wrap" class="oculto">
+        <h4 style="margin-top:20px;">Cliente</h4>
+        <div class="form-grid">
+          <div style="position:relative;">
+            <label>Documento (DNI)</label>
+            <input type="text" id="vz-cliente-documento" maxlength="11" inputmode="numeric" placeholder="Escribi 3+ digitos para buscar" />
+            <div id="vz-cliente-sugerencias" style="position:absolute; z-index:10; background:var(--bg-panel); border:1px solid var(--border); border-radius:6px; width:100%; max-height:200px; overflow-y:auto;"></div>
+          </div>
+          <div><label>Nombre y apellido</label><input type="text" id="vz-cliente-nombre" maxlength="255" /></div>
+          <div><label>Dirección</label><input type="text" id="vz-cliente-direccion" maxlength="255" /></div>
+          <div><label>Teléfono</label><input type="text" id="vz-cliente-telefono" maxlength="12" inputmode="numeric" /></div>
+        </div>
+
+        <h4>Beneficiario</h4>
+        <div id="vz-beneficiarios-existentes" class="form-grid"></div>
+        <div class="form-grid">
+          <div><label>Tipo documento</label>
+            <select id="vz-benef-tipo">
+              <option value="RIF">RIF</option>
+              <option value="E">E</option>
+              <option value="CI">CI</option>
+            </select>
+          </div>
+          <div><label>Documento</label><input type="text" id="vz-benef-documento" maxlength="20" /></div>
+          <div><label>Nombre y apellido</label><input type="text" id="vz-benef-nombre" maxlength="255" /></div>
+          <div><label>Dirección</label><input type="text" id="vz-benef-direccion" maxlength="255" /></div>
+          <div><label>Banco</label><input type="text" id="vz-benef-banco" maxlength="255" /></div>
+          <div><label>Cuenta</label><input type="text" id="vz-benef-cuenta" placeholder="0000-0000-0000-0000-0000" maxlength="24" /></div>
+        </div>
+
+        <h4>Transacción</h4>
+        <div class="form-grid">
+          <div><label>Valor (ARS)</label><input type="text" id="vz-valor-ars" placeholder="0.00" /></div>
+          <div><label>Tasa</label><input type="text" id="vz-tasa" placeholder="0.0000" /></div>
+          <div><label>Total (Bs)</label><input type="text" id="vz-total-bs" readonly value="0" /></div>
+        </div>
+        <button class="btn-primary" id="vz-confirmar-btn">Confirmar transferencia a Venezuela</button>
+      </div>
     </div>
 
     <div class="panel" style="margin-bottom:20px;">
@@ -1029,7 +1071,206 @@ async function vistaTransferencias(contenedor) {
   });
 
   document.getElementById('f-aplicar').addEventListener('click', cargarTransferencias);
+  inicializarFormularioVenezuela();
   await cargarTransferencias();
+}
+
+let _vzClienteSeleccionado = null; // {id, documento, nombre, ...} o null si es nuevo
+let _vzBeneficiarioSeleccionadoId = null; // id de un beneficiario existente, o null si es nuevo
+
+function inicializarFormularioVenezuela() {
+  const destinoInput = document.getElementById('tr-destino');
+  const camposSimples = document.getElementById('tr-campos-simples');
+  const wrapVenezuela = document.getElementById('form-venezuela-wrap');
+
+  const actualizarVisibilidad = () => {
+    const esVenezuela = destinoInput.value.trim().toLowerCase() === 'venezuela';
+    camposSimples.style.display = esVenezuela ? 'none' : 'contents';
+    wrapVenezuela.classList.toggle('oculto', !esVenezuela);
+  };
+  destinoInput.addEventListener('input', actualizarVisibilidad);
+  destinoInput.addEventListener('change', actualizarVisibilidad);
+  actualizarVisibilidad();
+
+  // Autocompletar cliente por documento (3+ digitos)
+  const docInput = document.getElementById('vz-cliente-documento');
+  const sugerenciasWrap = document.getElementById('vz-cliente-sugerencias');
+  docInput.addEventListener('input', async () => {
+    _vzClienteSeleccionado = null;
+    const valor = docInput.value.trim();
+    sugerenciasWrap.innerHTML = '';
+    if (valor.length < 3) return;
+    try {
+      const clientes = await Api.buscarClientesVenezuela(valor);
+      clientes.forEach((c) => {
+        const item = UI.el('div', {
+          style: 'padding:8px 10px; cursor:pointer; border-bottom:1px solid var(--border);',
+          onclick: () => seleccionarClienteVenezuela(c),
+        }, `${c.documento} — ${c.nombre}`);
+        sugerenciasWrap.appendChild(item);
+      });
+    } catch (err) {
+      // silencioso -- no bloquea la carga si falla la busqueda
+    }
+  });
+
+  // Mascara de cuenta: 0000-0000-0000-0000-0000 (solo digitos, guiones automaticos)
+  const cuentaInput = document.getElementById('vz-benef-cuenta');
+  cuentaInput.addEventListener('input', () => {
+    const soloDigitos = cuentaInput.value.replace(/\D/g, '').slice(0, 20);
+    const grupos = soloDigitos.match(/.{1,4}/g) || [];
+    cuentaInput.value = grupos.join('-');
+  });
+
+  // Valor ARS: 2 decimales, hasta 16 enteros
+  const valorArsInput = document.getElementById('vz-valor-ars');
+  const tasaInput = document.getElementById('vz-tasa');
+  const totalBsInput = document.getElementById('vz-total-bs');
+  const limitarDecimal = (input, maxEnteros, maxDecimales) => {
+    let v = input.value.replace(/[^0-9.]/g, '');
+    const partes = v.split('.');
+    if (partes.length > 2) v = partes[0] + '.' + partes.slice(1).join('');
+    const [ent, dec] = v.split('.');
+    let entLimpio = (ent || '').slice(0, maxEnteros);
+    let decLimpio = dec !== undefined ? dec.slice(0, maxDecimales) : undefined;
+    input.value = decLimpio !== undefined ? `${entLimpio}.${decLimpio}` : entLimpio;
+  };
+  const recalcularTotalBs = () => {
+    const valorArs = Number(valorArsInput.value) || 0;
+    const tasa = Number(tasaInput.value) || 0;
+    totalBsInput.value = (valorArs * tasa).toFixed(2);
+  };
+  valorArsInput.addEventListener('input', () => { limitarDecimal(valorArsInput, 16, 2); recalcularTotalBs(); });
+  tasaInput.addEventListener('input', () => { limitarDecimal(tasaInput, 16, 4); recalcularTotalBs(); });
+
+  document.getElementById('vz-confirmar-btn').addEventListener('click', mostrarModalConfirmacionVenezuela);
+}
+
+function seleccionarClienteVenezuela(cliente) {
+  _vzClienteSeleccionado = cliente;
+  document.getElementById('vz-cliente-documento').value = cliente.documento;
+  document.getElementById('vz-cliente-nombre').value = cliente.nombre;
+  document.getElementById('vz-cliente-direccion').value = cliente.direccion || '';
+  document.getElementById('vz-cliente-telefono').value = cliente.telefono || '';
+  document.getElementById('vz-cliente-sugerencias').innerHTML = '';
+  cargarBeneficiariosDelCliente(cliente.id);
+}
+
+async function cargarBeneficiariosDelCliente(clienteId) {
+  const wrap = document.getElementById('vz-beneficiarios-existentes');
+  wrap.innerHTML = '<div class="empty-state">Buscando beneficiarios...</div>';
+  try {
+    const beneficiarios = await Api.listarBeneficiariosDeCliente(clienteId);
+    wrap.innerHTML = '';
+    if (beneficiarios.length === 0) {
+      wrap.appendChild(UI.el('p', { style: 'color:var(--text-muted); font-size:12px;' }, 'Este cliente no tiene beneficiarios cargados todavia -- completa los datos de abajo para crear uno nuevo.'));
+      return;
+    }
+    const select = UI.el('select', { id: 'vz-benef-existente' }, [
+      UI.el('option', { value: '' }, '+ Nuevo beneficiario'),
+      ...beneficiarios.map((b) => UI.el('option', { value: b.id }, `${b.nombre} (${b.tipo_documento} ${b.documento})`)),
+    ]);
+    select.addEventListener('change', () => {
+      const elegido = beneficiarios.find((b) => String(b.id) === select.value);
+      _vzBeneficiarioSeleccionadoId = elegido ? elegido.id : null;
+      document.getElementById('vz-benef-tipo').value = elegido ? elegido.tipo_documento : 'RIF';
+      document.getElementById('vz-benef-documento').value = elegido ? elegido.documento : '';
+      document.getElementById('vz-benef-nombre').value = elegido ? elegido.nombre : '';
+      document.getElementById('vz-benef-direccion').value = elegido ? (elegido.direccion || '') : '';
+      document.getElementById('vz-benef-banco').value = elegido ? (elegido.banco || '') : '';
+      document.getElementById('vz-benef-cuenta').value = elegido ? (elegido.cuenta || '') : '';
+    });
+    wrap.appendChild(UI.el('div', {}, [UI.el('label', {}, 'Beneficiario existente'), select]));
+  } catch (err) {
+    wrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
+  }
+}
+
+function mostrarModalConfirmacionVenezuela() {
+  const datos = {
+    fecha: document.getElementById('tr-fecha').value,
+    clienteDocumento: document.getElementById('vz-cliente-documento').value,
+    clienteNombre: document.getElementById('vz-cliente-nombre').value,
+    clienteDireccion: document.getElementById('vz-cliente-direccion').value,
+    clienteTelefono: document.getElementById('vz-cliente-telefono').value,
+    benefTipo: document.getElementById('vz-benef-tipo').value,
+    benefDocumento: document.getElementById('vz-benef-documento').value,
+    benefNombre: document.getElementById('vz-benef-nombre').value,
+    benefDireccion: document.getElementById('vz-benef-direccion').value,
+    benefBanco: document.getElementById('vz-benef-banco').value,
+    benefCuenta: document.getElementById('vz-benef-cuenta').value,
+    valorArs: document.getElementById('vz-valor-ars').value,
+    tasa: document.getElementById('vz-tasa').value,
+    totalBs: document.getElementById('vz-total-bs').value,
+  };
+
+  if (!datos.clienteDocumento || !datos.clienteNombre) { UI.toast('Completa los datos del cliente.', 'error'); return; }
+  if (!datos.benefDocumento || !datos.benefNombre || !datos.benefCuenta) { UI.toast('Completa los datos del beneficiario.', 'error'); return; }
+  if (!datos.valorArs || !datos.tasa) { UI.toast('Completa el valor y la tasa.', 'error'); return; }
+
+  const overlay = UI.el('div', {
+    style: 'position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:1000; display:flex; align-items:center; justify-content:center;',
+  });
+  const modal = UI.el('div', {
+    style: 'background:var(--bg-panel); border-radius:12px; padding:24px; max-width:500px; width:90%; max-height:85vh; overflow-y:auto;',
+  }, [
+    UI.el('h3', {}, '🇻🇪 Confirmar transferencia a Venezuela'),
+    UI.el('p', { style: 'font-size:13px; line-height:1.8;' }, [
+      UI.el('strong', {}, 'Cliente: '), `${datos.clienteNombre} (${datos.clienteDocumento})`, UI.el('br'),
+      datos.clienteDireccion ? UI.el('span', {}, `Dirección: ${datos.clienteDireccion}`) : '', UI.el('br'),
+      datos.clienteTelefono ? UI.el('span', {}, `Teléfono: ${datos.clienteTelefono}`) : '', UI.el('br'), UI.el('br'),
+      UI.el('strong', {}, 'Beneficiario: '), `${datos.benefNombre} (${datos.benefTipo} ${datos.benefDocumento})`, UI.el('br'),
+      datos.benefDireccion ? UI.el('span', {}, `Dirección: ${datos.benefDireccion}`) : '', UI.el('br'),
+      datos.benefBanco ? UI.el('span', {}, `Banco: ${datos.benefBanco}`) : '', UI.el('br'),
+      `Cuenta: ${datos.benefCuenta}`, UI.el('br'), UI.el('br'),
+      UI.el('strong', {}, 'Transacción: '), UI.el('br'),
+      `Valor: ${UI.formatoARS(Number(datos.valorArs))}`, UI.el('br'),
+      `Tasa: ${datos.tasa}`, UI.el('br'),
+      `Total Bs: ${UI.formatoNumero(Number(datos.totalBs))}`,
+    ]),
+    UI.el('div', { style: 'display:flex; gap:10px; margin-top:16px;' }, [
+      UI.el('button', { class: 'btn-secondary', onclick: () => overlay.remove() }, 'Cancelar'),
+      UI.el('button', {
+        class: 'btn-primary',
+        onclick: async () => {
+          try {
+            let clienteId = _vzClienteSeleccionado ? _vzClienteSeleccionado.id : null;
+            if (!clienteId) {
+              const nuevoCliente = await Api.crearClienteVenezuela({
+                documento: datos.clienteDocumento, nombre: datos.clienteNombre,
+                direccion: datos.clienteDireccion, telefono: datos.clienteTelefono,
+              });
+              clienteId = nuevoCliente.id;
+            }
+            let beneficiarioId = _vzBeneficiarioSeleccionadoId;
+            if (!beneficiarioId) {
+              const nuevoBeneficiario = await Api.crearBeneficiarioVenezuela({
+                cliente_id: clienteId, tipo_documento: datos.benefTipo, documento: datos.benefDocumento,
+                nombre: datos.benefNombre, direccion: datos.benefDireccion, banco: datos.benefBanco, cuenta: datos.benefCuenta,
+              });
+              beneficiarioId = nuevoBeneficiario.id;
+            }
+            await Api.crearTransferenciaVenezuela({
+              fecha: datos.fecha, cliente_id: clienteId, beneficiario_id: beneficiarioId,
+              valor_ars: Number(datos.valorArs), tasa: Number(datos.tasa), total_bs: Number(datos.totalBs),
+            });
+            UI.toast('Transferencia a Venezuela guardada.');
+            overlay.remove();
+            document.getElementById('form-venezuela-wrap').querySelectorAll('input, select').forEach((el) => {
+              if (el.id !== 'vz-benef-tipo') el.value = '';
+            });
+            _vzClienteSeleccionado = null;
+            _vzBeneficiarioSeleccionadoId = null;
+            document.getElementById('vz-beneficiarios-existentes').innerHTML = '';
+          } catch (err) {
+            UI.toast(err.message, 'error');
+          }
+        },
+      }, 'Confirmar'),
+    ]),
+  ]);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
 }
 
 async function cargarTransferencias() {
