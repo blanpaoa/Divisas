@@ -1583,6 +1583,19 @@ async function cerrarElDia(e) {
     const ok = Math.abs(diferenciaFinal) < 2;
 
     resultadoWrap.innerHTML = '';
+    if (!esAdmin()) {
+      // El operador no debe ver los valores de Utilidad/Existencia/Debemos/etc.
+      // -- solo una confirmacion simple de que el cierre se hizo.
+      resultadoWrap.appendChild(UI.el('div', {
+        class: 'panel',
+        style: 'text-align:center; padding:30px;',
+      }, [
+        UI.el('div', { style: 'font-size:40px; margin-bottom:10px;' }, '✅'),
+        UI.el('h3', {}, 'Cierre completado'),
+      ]));
+      UI.toast('Día cerrado.');
+      return;
+    }
     const panel = UI.el('div', { class: 'panel' }, [UI.el('h3', {}, '✅ Día cerrado')]);
     const grid = UI.el('div', { class: 'cards-grid' });
     [
