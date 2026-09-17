@@ -1539,7 +1539,13 @@ async function cerrarElDia(e) {
     // diferencia se suma al acumulado -- matematicamente esto hace que el
     // chequeo final de exactamente $0.
     const existenciaTenencias = Object.values(motor.monedas || {}).reduce((s, p) => s + p.cantidad * p.costo_promedio, 0);
-    const salidaTotal = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    // "salidas" se trajo ANTES de calcular el bruto fresco de CTA BBVA Lili
+    // Venezuela (mismo problema que ya se soluciono para Entradas/ABONOS) --
+    // se ajusta aca para que Existencia use el valor recien calculado, no el
+    // viejo, y para que el chequeo converja en un solo toque de "Cerrar el dia".
+    const ctaEnListaVieja = salidas.find((f) => f.concepto === 'CTA BBVA Lili Venezuela');
+    const salidaTotalCrudo = salidas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
+    const salidaTotal = salidaTotalCrudo - (ctaEnListaVieja ? Number(ctaEnListaVieja.total_ars || 0) : 0) + ctaBrutoAcumulado;
     // "entradas" se trajo ANTES de calcular el bruto fresco de ABONOS DE CUENTA
     // TRANS VENEZUELA -- lo ajustamos aca para no depender de re-consultar
     // (y para que el chequeo converja en un solo toque de "Cerrar el dia").
