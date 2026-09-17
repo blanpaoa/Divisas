@@ -378,7 +378,7 @@ const Api = {
   async listarTransferenciasVenezuela({ desde, hasta } = {}) {
     let query = supabaseClient
       .from('transferencias_venezuela')
-      .select('*, clientes_venezuela(documento,nombre), beneficiarios_venezuela(nombre,documento,tipo_documento,banco,cuenta)')
+      .select('*, clientes_venezuela(documento,nombre,direccion,telefono), beneficiarios_venezuela(nombre,documento,tipo_documento,banco,cuenta,direccion)')
       .order('fecha', { ascending: false });
     if (desde) query = query.gte('fecha', desde);
     if (hasta) query = query.lte('fecha', hasta);

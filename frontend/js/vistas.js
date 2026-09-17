@@ -1160,7 +1160,7 @@ async function cargarHistorialTransferenciasVenezuela() {
       return;
     }
     const table = UI.el('table', {}, [
-      UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Cliente', 'Beneficiario', 'Valor ARS', 'Tasa', 'Total Bs'].map((h) => UI.el('th', {}, h)))),
+      UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Cliente', 'Beneficiario', 'Valor ARS', 'Tasa', 'Total Bs', ''].map((h) => UI.el('th', {}, h)))),
     ]);
     const tbody = UI.el('tbody');
     filas.forEach((f) => {
@@ -1173,6 +1173,22 @@ async function cargarHistorialTransferenciasVenezuela() {
         UI.el('td', {}, UI.formatoARS(f.valor_ars)),
         UI.el('td', {}, UI.formatoNumero(f.tasa)),
         UI.el('td', {}, UI.formatoNumero(f.total_bs)),
+        UI.el('td', {}, UI.el('button', {
+          class: 'btn-secondary',
+          onclick: () => generarReciboVenezuela({
+            fecha: f.fecha, numeroRecibo: f.id,
+            clienteNombre: f.clientes_venezuela ? f.clientes_venezuela.nombre : '',
+            clienteDocumento: f.clientes_venezuela ? f.clientes_venezuela.documento : '',
+            clienteDireccion: f.clientes_venezuela ? f.clientes_venezuela.direccion : '',
+            clienteTelefono: f.clientes_venezuela ? f.clientes_venezuela.telefono : '',
+            benefNombre: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.nombre : '',
+            benefDocumento: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.documento : '',
+            benefDireccion: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.direccion : '',
+            benefBanco: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.banco : '',
+            benefCuenta: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.cuenta : '',
+            valorArs: f.valor_ars, tasa: f.tasa, totalBs: f.total_bs,
+          }),
+        }, '🖨️ Recibo')),
       ]));
     });
     table.appendChild(tbody);
@@ -1221,6 +1237,78 @@ async function cargarBeneficiariosDelCliente(clienteId) {
   } catch (err) {
     wrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
   }
+}
+
+function generarReciboVenezuela(datos) {
+  const fechaObj = new Date();
+  const hora = `${String(fechaObj.getHours()).padStart(2, '0')}:${String(fechaObj.getMinutes()).padStart(2, '0')}H`;
+  const numero = String(datos.numeroRecibo).padStart(2, '0');
+
+  const bloqueRecibo = (copiaLabel) => `
+    <div class="recibo">
+      <table class="tabla-encabezado">
+        <tr>
+          <td class="celda-logo" rowspan="3"><img src="${LOGO_BASE64}" alt="Agencia Pueyrredón" /></td>
+          <td class="etiqueta">Fecha</td><td>${datos.fecha}</td>
+          <td class="numero-serie" rowspan="3">ss ${numero}</td>
+        </tr>
+        <tr><td class="etiqueta">Hora</td><td>${hora}</td></tr>
+        <tr><td class="etiqueta">Agencia</td><td>PUEYRREDON</td></tr>
+      </table>
+      <table class="tabla-datos">
+        <tr><td class="etiqueta">Cliente</td><td colspan="3">${datos.clienteNombre}</td></tr>
+        <tr><td class="etiqueta">Teléfono</td><td>${datos.clienteTelefono || ''}</td><td class="etiqueta">DNI/CUIT</td><td>${datos.clienteDocumento}</td></tr>
+        <tr><td class="etiqueta">Dirección</td><td colspan="3">${datos.clienteDireccion || ''}</td></tr>
+        <tr><td class="etiqueta">Nombre</td><td colspan="3">${datos.benefNombre}</td></tr>
+        <tr><td class="etiqueta">Documento</td><td colspan="3">${datos.benefDocumento}</td></tr>
+        <tr><td class="etiqueta">Banco</td><td colspan="3">${datos.benefBanco || ''}</td></tr>
+        <tr><td class="etiqueta">Número de Cuenta</td><td colspan="3">${datos.benefCuenta}</td></tr>
+        <tr><td></td><td></td><td class="etiqueta importe-titulo" colspan="2">Importe</td></tr>
+        <tr><td></td><td></td><td class="etiqueta">Pesos Argentinos</td><td>$${UI.formatoNumero(Number(datos.valorArs))}</td></tr>
+        <tr><td></td><td></td><td class="etiqueta">Tasa</td><td>$${datos.tasa}</td></tr>
+        <tr><td></td><td></td><td class="etiqueta">Valor a Pagar BsS.</td><td>$${UI.formatoNumero(Number(datos.totalBs))}</td></tr>
+        <tr><td class="etiqueta">${copiaLabel}</td><td class="etiqueta">Firma</td><td colspan="2"></td></tr>
+      </table>
+    </div>
+  `;
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8" />
+      <title>Recibo - ${datos.clienteNombre}</title>
+      <style>
+        body { font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #000; margin: 20px; }
+        .titulo { font-weight: bold; font-size: 13px; margin-bottom: 6px; }
+        .recibo { width: 620px; margin-bottom: 30px; }
+        table { border-collapse: collapse; width: 100%; }
+        td { border: 1px solid #000; padding: 4px 8px; vertical-align: top; }
+        .celda-logo { width: 110px; text-align: center; }
+        .celda-logo img { width: 90px; }
+        .etiqueta { font-weight: bold; background: #f4f4f4; white-space: nowrap; }
+        .numero-serie { text-align: right; vertical-align: top; font-size: 11px; }
+        .importe-titulo { text-align: left; }
+        .btn-imprimir { margin-bottom: 16px; padding: 8px 16px; cursor: pointer; }
+        @media print { .no-imprimir { display: none; } }
+      </style>
+    </head>
+    <body>
+      <button class="btn-imprimir no-imprimir" onclick="window.print()">🖨️ Imprimir / Guardar como PDF</button>
+      <div class="titulo">ENVIOS AGENCIA PUEYRREDON</div>
+      ${bloqueRecibo('Copia Cliente')}
+      ${bloqueRecibo('Copia Local')}
+    </body>
+    </html>
+  `;
+
+  const ventana = window.open('', '_blank');
+  if (!ventana) {
+    UI.toast('El navegador bloqueó la ventana del recibo -- permití popups para este sitio.', 'error');
+    return;
+  }
+  ventana.document.write(html);
+  ventana.document.close();
 }
 
 function mostrarModalConfirmacionVenezuela() {
@@ -1287,12 +1375,13 @@ function mostrarModalConfirmacionVenezuela() {
               });
               beneficiarioId = nuevoBeneficiario.id;
             }
-            await Api.crearTransferenciaVenezuela({
+            const transferenciaCreada = await Api.crearTransferenciaVenezuela({
               fecha: datos.fecha, cliente_id: clienteId, beneficiario_id: beneficiarioId,
               valor_ars: Number(datos.valorArs), tasa: Number(datos.tasa), total_bs: Number(datos.totalBs),
             });
             UI.toast('Transferencia a Venezuela guardada.');
             overlay.remove();
+            generarReciboVenezuela({ ...datos, numeroRecibo: transferenciaCreada.id });
             document.getElementById('form-venezuela-wrap').querySelectorAll('input, select').forEach((el) => {
               if (el.id !== 'vz-benef-tipo') el.value = '';
             });

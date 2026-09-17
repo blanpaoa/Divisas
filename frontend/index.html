@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Casa de Cambio - Gestion</title>
+<title>Agencia Pueyrredón - Gestion</title>
+<link rel="icon" href="/img/logo.png" />
 <link rel="stylesheet" href="/css/styles.css" />
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
@@ -13,7 +14,8 @@
 <!-- ===================== LOGIN ===================== -->
 <div id="vista-login" class="login-wrap">
   <div class="login-card">
-    <h1>Casa de Cambio</h1>
+    <img src="/img/logo.png" alt="Agencia Pueyrredón" style="max-width:160px; display:block; margin:0 auto 12px;" />
+    <h1>Agencia Pueyrredón</h1>
     <p class="subt">Ingresa con tu email para continuar</p>
     <form id="form-login">
       <label for="login-usuario">Email</label>
@@ -29,7 +31,10 @@
 <!-- ===================== APP ===================== -->
 <div id="vista-app" class="app-shell oculto">
   <aside class="sidebar">
-    <h2>💱 Casa de Cambio</h2>
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+      <img src="/img/logo.png" alt="Agencia Pueyrredón" style="width:32px; height:32px; object-fit:contain;" />
+      <h2 style="margin:0;">Agencia Pueyrredón</h2>
+    </div>
     <div class="user-box">
       <strong id="sb-nombre-usuario">-</strong>
       <span id="sb-rol-usuario">-</span>
@@ -67,6 +72,7 @@
 <div id="toast" class="toast oculto"></div>
 
 <script src="/js/config.js"></script>
+<script src="/js/logo-base64.js"></script>
 <script src="/js/supabaseClient.js"></script>
 <script src="/js/motor.js"></script>
 <script src="/js/api.js"></script>
