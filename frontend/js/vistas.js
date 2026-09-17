@@ -1500,6 +1500,16 @@ function diaAnterior(fechaStr) {
 // encadena Utilidad Venezuela y Utilidad/Gastos acumulados -- todo junto,
 // una sola escritura atomica por tabla, sin estados intermedios.
 async function cerrarElDia(e) {
+  // ATENCION al mantener esta funcion: "Cerrar el dia" LEE varias cosas al
+  // principio (motor/posiciones, entradas, salidas) y despues ESCRIBE en esas
+  // mismas tablas (CTA BBVA Lili Venezuela -> Salidas, ABONOS DE CUENTA TRANS
+  // VENEZUELA -> Entradas, cadivi_dia_ars -> resumen_diario, que a su vez
+  // alimenta el pozo de pesos). Si se agrega algun auto-calculo NUEVO que
+  // escriba en Entradas/Salidas/resumen_diario/otros_saldos DURANTE este
+  // mismo cierre, hay que sumar el mismo tipo de ajuste que ya existe abajo
+  // (restar el valor viejo, sumar el fresco) -- si no, el chequeo va a
+  // necesitar dos toques de "Cerrar el dia" para converger (o directamente no
+  // converger nunca), en vez de uno solo.
   e.preventDefault();
   const fecha = document.getElementById('rd-fecha').value;
   const cadiviDia = Number(document.getElementById('rd-cadivi-dia').value) || 0;
@@ -1507,12 +1517,13 @@ async function cerrarElDia(e) {
   resultadoWrap.innerHTML = '<div class="empty-state">Cerrando el día...</div>';
 
   try {
-    const [motor, gastosHoy, historialAnterior, entradas, salidas] = await Promise.all([
+    const [motor, gastosHoy, historialAnterior, entradas, salidas, resumenActualDeHoy] = await Promise.all([
       Api.get('/motor/posiciones', { hasta: fecha }),
       Api.get('/gastos', { desde: fecha, hasta: fecha }),
       Api.get('/resumen-diario', { hasta: diaAnterior(fecha), desde: UI.haceDias(3650) }),
       Api.estadoActual('/entradas', fecha),
       Api.estadoActual('/salidas', fecha),
+      Api.get(`/resumen-diario/${fecha}`).catch(() => null),
     ]);
 
     const utilidadDia = motor.fechaCalculada === fecha ? motor.utilidadDelDia : 0;
@@ -1539,6 +1550,15 @@ async function cerrarElDia(e) {
     // diferencia se suma al acumulado -- matematicamente esto hace que el
     // chequeo final de exactamente $0.
     const existenciaTenencias = Object.values(motor.monedas || {}).reduce((s, p) => s + p.cantidad * p.costo_promedio, 0);
+    // "motor" (y por lo tanto existenciaTenencias, que incluye el pozo de
+    // pesos) se trajo ANTES de guardar el cadivi_dia_ars fresco de HOY --
+    // mismo problema de las 2 correcciones anteriores. El pozo de pesos ya
+    // suma cadivi_dia_ars como entrada automatica (ver api.js), pero con el
+    // valor VIEJO que hubiera en la base para esta fecha (0 si es la primera
+    // vez). Ajustamos por la diferencia para que Existencia use el valor
+    // fresco desde el primer toque de "Cerrar el dia".
+    const cadiviDiaViejoEnDB = resumenActualDeHoy ? Number(resumenActualDeHoy.cadivi_dia_ars || 0) : 0;
+    const existenciaTenenciasAjustada = existenciaTenencias + (cadiviDia - cadiviDiaViejoEnDB);
     // "salidas" se trajo ANTES de calcular el bruto fresco de CTA BBVA Lili
     // Venezuela (mismo problema que ya se soluciono para Entradas/ABONOS) --
     // se ajusta aca para que Existencia use el valor recien calculado, no el
@@ -1552,7 +1572,7 @@ async function cerrarElDia(e) {
     const abonosEnListaVieja = entradas.find((f) => f.concepto === 'ABONOS DE CUENTA TRANS, VENEZUELA');
     const entradasTotalCrudo = entradas.reduce((s, r) => s + Number(r.total_ars || 0), 0);
     const entradasTotal = entradasTotalCrudo - (abonosEnListaVieja ? Number(abonosEnListaVieja.total_ars || 0) : 0) + abonosBrutoAcumulado;
-    const existencia = existenciaTenencias + salidaTotal + moneygram;
+    const existencia = existenciaTenenciasAjustada + salidaTotal + moneygram;
     const debemosConFaltanteAyer = entradasTotal + utilidadCadivi + faltanteAcumAnterior + latin;
     const diferenciaDelDia = (existencia - debemosConFaltanteAyer) - total;
     const faltanteSobrante = faltanteAcumAnterior + diferenciaDelDia;
