@@ -1019,7 +1019,10 @@ async function vistaTransferencias(contenedor) {
           <div><label>Tasa</label><input type="text" id="vz-tasa" placeholder="0.0000" /></div>
           <div><label>Total (Bs)</label><input type="text" id="vz-total-bs" readonly value="0" /></div>
         </div>
-        <button class="btn-primary" id="vz-confirmar-btn">Confirmar transferencia a Venezuela</button>
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <button class="btn-primary" id="vz-confirmar-btn">Confirmar transferencia a Venezuela</button>
+          <button class="btn-secondary" id="vz-copiar-btn" type="button">📋 Copiar datos del beneficiario</button>
+        </div>
         <p style="color:var(--text-muted); font-size:12px; margin-top:10px;">
           Esta transferencia va a aparecer en el Historial de abajo junto con las demás, con destino "Venezuela".
         </p>
@@ -1137,6 +1140,48 @@ function inicializarFormularioVenezuela() {
   tasaInput.addEventListener('input', () => { limitarDecimal(tasaInput, 16, 4); recalcularTotalBs(); });
 
   document.getElementById('vz-confirmar-btn').addEventListener('click', mostrarModalConfirmacionVenezuela);
+  document.getElementById('vz-copiar-btn').addEventListener('click', () => {
+    const texto = textoDatosVenezuelaBeneficiario({
+      nombre: document.getElementById('vz-benef-nombre').value,
+      tipoDocumento: document.getElementById('vz-benef-tipo').value,
+      documento: document.getElementById('vz-benef-documento').value,
+      cuenta: document.getElementById('vz-benef-cuenta').value,
+      banco: document.getElementById('vz-benef-banco').value,
+      totalBs: document.getElementById('vz-total-bs').value,
+    });
+    copiarAlPortapapeles(texto);
+  });
+}
+
+// Numero "limpio" para copiar/pegar: sin separadores de miles ni decimales
+// de sobra (100000000 en vez de 100.000.000,00) -- pero conserva los
+// decimales si el importe realmente los tiene (ej. 100000000.5).
+function formatoImporteCopiar(valor) {
+  const n = Number(valor) || 0;
+  return Number.isInteger(n) ? String(n) : String(n.toFixed(2));
+}
+
+// Arma el texto listo para pegar en WhatsApp (o donde sea) con los datos
+// del beneficiario, uno por linea, en el orden: nombre, tipo+documento,
+// cuenta sin mascara, banco, importe en bolivares.
+function textoDatosVenezuelaBeneficiario({ nombre, tipoDocumento, documento, cuenta, banco, totalBs }) {
+  const cuentaSinMascara = (cuenta || '').replace(/-/g, '');
+  return [
+    nombre || '',
+    `${tipoDocumento || ''}${documento || ''}`,
+    cuentaSinMascara,
+    banco || '',
+    formatoImporteCopiar(totalBs),
+  ].join('\n');
+}
+
+async function copiarAlPortapapeles(texto) {
+  try {
+    await navigator.clipboard.writeText(texto);
+    UI.toast('Datos copiados.');
+  } catch (err) {
+    UI.toast('No se pudo copiar automaticamente. Copialo a mano.', 'error');
+  }
 }
 
 function seleccionarClienteVenezuela(cliente) {
@@ -1417,6 +1462,18 @@ async function cargarTransferencias() {
     const acciones = [];
     if (t.origen === 'venezuela') {
       const f = t.raw;
+      acciones.push(UI.el('button', {
+        class: 'btn-secondary',
+        title: 'Copiar datos del beneficiario',
+        onclick: () => copiarAlPortapapeles(textoDatosVenezuelaBeneficiario({
+          nombre: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.nombre : '',
+          tipoDocumento: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.tipo_documento : '',
+          documento: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.documento : '',
+          cuenta: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.cuenta : '',
+          banco: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.banco : '',
+          totalBs: f.total_bs,
+        })),
+      }, '📋'));
       acciones.push(UI.el('button', {
         class: 'btn-secondary',
         onclick: () => generarReciboVenezuela({
