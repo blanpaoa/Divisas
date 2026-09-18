@@ -1019,12 +1019,10 @@ async function vistaTransferencias(contenedor) {
           <div><label>Tasa</label><input type="text" id="vz-tasa" placeholder="0.0000" /></div>
           <div><label>Total (Bs)</label><input type="text" id="vz-total-bs" readonly value="0" /></div>
         </div>
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <button class="btn-primary" id="vz-confirmar-btn">Confirmar transferencia a Venezuela</button>
-          <button class="btn-secondary" id="vz-copiar-btn" type="button">📋 Copiar datos del beneficiario</button>
-        </div>
+        <button class="btn-primary" id="vz-confirmar-btn">Confirmar transferencia a Venezuela</button>
         <p style="color:var(--text-muted); font-size:12px; margin-top:10px;">
           Esta transferencia va a aparecer en el Historial de abajo junto con las demás, con destino "Venezuela".
+          Una vez confirmada, desde esa fila vas a poder copiar los datos del beneficiario (📋) o generar el recibo (🖨️).
         </p>
       </div>
     </div>
@@ -1140,17 +1138,6 @@ function inicializarFormularioVenezuela() {
   tasaInput.addEventListener('input', () => { limitarDecimal(tasaInput, 16, 4); recalcularTotalBs(); });
 
   document.getElementById('vz-confirmar-btn').addEventListener('click', mostrarModalConfirmacionVenezuela);
-  document.getElementById('vz-copiar-btn').addEventListener('click', () => {
-    const texto = textoDatosVenezuelaBeneficiario({
-      nombre: document.getElementById('vz-benef-nombre').value,
-      tipoDocumento: document.getElementById('vz-benef-tipo').value,
-      documento: document.getElementById('vz-benef-documento').value,
-      cuenta: document.getElementById('vz-benef-cuenta').value,
-      banco: document.getElementById('vz-benef-banco').value,
-      totalBs: document.getElementById('vz-total-bs').value,
-    });
-    copiarAlPortapapeles(texto);
-  });
 }
 
 // Numero "limpio" para copiar/pegar: sin separadores de miles ni decimales
