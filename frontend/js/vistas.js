@@ -1027,14 +1027,6 @@ async function vistaTransferencias(contenedor) {
       </div>
     </div>
 
-    <div class="panel" style="margin-bottom:20px;">
-      <h3>Saldo neto por destino y moneda</h3>
-      <p style="color:var(--text-muted); font-size:12px; margin-top:-6px;">
-        Ingresos + Abonos − Egresos − Debemos, sumando todo el historial cargado.
-      </p>
-      <div id="tr-resumen" class="cards-grid"></div>
-    </div>
-
     <div class="panel">
       <h3>Historial</h3>
       <div class="filters-bar">
@@ -1403,41 +1395,16 @@ function mostrarModalConfirmacionVenezuela() {
 async function cargarTransferencias() {
   const desde = document.getElementById('f-desde').value;
   const hasta = document.getElementById('f-hasta').value;
-  const resumenWrap = document.getElementById('tr-resumen');
   const tablaWrap = document.getElementById('tr-tabla-wrap');
   tablaWrap.innerHTML = '<div class="empty-state">Cargando...</div>';
 
-  // El resumen de saldo neto usa TODO el historial (no solo el filtro de fecha)
-  let todas, filtradas;
+  let filtradas;
   try {
-    [todas, filtradas] = await Promise.all([
-      Api.get('/transferencias', {}),
-      Api.get('/transferencias', { desde, hasta }),
-    ]);
+    filtradas = await Api.get('/transferencias', { desde, hasta });
   } catch (err) {
+    console.error('Error cargando transferencias:', err);
     tablaWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
     return;
-  }
-
-  const saldos = {}; // `${destino}|${moneda_codigo}` -> saldo
-  todas.forEach((t) => {
-    const key = `${t.destino}|${t.moneda_codigo}`;
-    const signo = (t.tipo === 'ingreso' || t.tipo === 'abonos') ? 1 : -1;
-    saldos[key] = (saldos[key] || 0) + signo * Number(t.valor || 0);
-  });
-
-  resumenWrap.innerHTML = '';
-  const entradasResumen = Object.entries(saldos);
-  if (entradasResumen.length === 0) {
-    resumenWrap.appendChild(UI.el('div', { class: 'empty-state' }, 'Todavia no hay movimientos cargados.'));
-  } else {
-    entradasResumen.forEach(([key, saldo]) => {
-      const [destino, monedaCodigo] = key.split('|');
-      resumenWrap.appendChild(UI.el('div', { class: 'stat-card' }, [
-        UI.el('div', { class: 'label' }, `${destino} (${monedaCodigo})`),
-        UI.el('div', { class: `value ${saldo >= 0 ? 'positivo' : 'negativo'}` }, UI.formatoNumero(saldo)),
-      ]));
-    });
   }
 
   if (filtradas.length === 0) {
