@@ -6,6 +6,7 @@ const TABLA_POR_RECURSO = {
   salidas: 'salidas_prestamos',
   gastos: 'gastos',
   transferencias: 'transferencias',
+  'transferencias-venezuela': 'transferencias_venezuela',
   'resumen-diario': 'resumen_diario',
   'utilidad-mensual': 'utilidad_mensual',
   monedas: 'monedas',

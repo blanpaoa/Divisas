@@ -1020,10 +1020,9 @@ async function vistaTransferencias(contenedor) {
           <div><label>Total (Bs)</label><input type="text" id="vz-total-bs" readonly value="0" /></div>
         </div>
         <button class="btn-primary" id="vz-confirmar-btn">Confirmar transferencia a Venezuela</button>
-        <div style="margin-top:20px;">
-          <h4>Historial de transferencias a Venezuela</h4>
-          <div id="vz-historial-wrap"></div>
-        </div>
+        <p style="color:var(--text-muted); font-size:12px; margin-top:10px;">
+          Esta transferencia va a aparecer en el Historial de abajo junto con las demás, con destino "Venezuela".
+        </p>
       </div>
     </div>
 
@@ -1138,57 +1137,6 @@ function inicializarFormularioVenezuela() {
   tasaInput.addEventListener('input', () => { limitarDecimal(tasaInput, 16, 4); recalcularTotalBs(); });
 
   document.getElementById('vz-confirmar-btn').addEventListener('click', mostrarModalConfirmacionVenezuela);
-  cargarHistorialTransferenciasVenezuela();
-}
-
-async function cargarHistorialTransferenciasVenezuela() {
-  const wrap = document.getElementById('vz-historial-wrap');
-  if (!wrap) return;
-  wrap.innerHTML = '<div class="empty-state">Cargando...</div>';
-  try {
-    const filas = await Api.listarTransferenciasVenezuela({});
-    if (filas.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">Sin transferencias a Venezuela cargadas todavia.</div>';
-      return;
-    }
-    const table = UI.el('table', {}, [
-      UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Cliente', 'Beneficiario', 'Valor ARS', 'Tasa', 'Total Bs', ''].map((h) => UI.el('th', {}, h)))),
-    ]);
-    const tbody = UI.el('tbody');
-    filas.forEach((f) => {
-      const cliente = f.clientes_venezuela ? `${f.clientes_venezuela.nombre} (${f.clientes_venezuela.documento})` : '-';
-      const benef = f.beneficiarios_venezuela ? `${f.beneficiarios_venezuela.nombre} (${f.beneficiarios_venezuela.tipo_documento} ${f.beneficiarios_venezuela.documento})` : '-';
-      tbody.appendChild(UI.el('tr', {}, [
-        UI.el('td', {}, f.fecha),
-        UI.el('td', {}, cliente),
-        UI.el('td', {}, benef),
-        UI.el('td', {}, UI.formatoARS(f.valor_ars)),
-        UI.el('td', {}, UI.formatoNumero(f.tasa)),
-        UI.el('td', {}, UI.formatoNumero(f.total_bs)),
-        UI.el('td', {}, UI.el('button', {
-          class: 'btn-secondary',
-          onclick: () => generarReciboVenezuela({
-            fecha: f.fecha, numeroRecibo: f.id,
-            clienteNombre: f.clientes_venezuela ? f.clientes_venezuela.nombre : '',
-            clienteDocumento: f.clientes_venezuela ? f.clientes_venezuela.documento : '',
-            clienteDireccion: f.clientes_venezuela ? f.clientes_venezuela.direccion : '',
-            clienteTelefono: f.clientes_venezuela ? f.clientes_venezuela.telefono : '',
-            benefNombre: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.nombre : '',
-            benefDocumento: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.documento : '',
-            benefDireccion: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.direccion : '',
-            benefBanco: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.banco : '',
-            benefCuenta: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.cuenta : '',
-            valorArs: f.valor_ars, tasa: f.tasa, totalBs: f.total_bs,
-          }),
-        }, '🖨️ Recibo')),
-      ]));
-    });
-    table.appendChild(tbody);
-    wrap.innerHTML = '';
-    wrap.appendChild(table);
-  } catch (err) {
-    wrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
-  }
 }
 
 function seleccionarClienteVenezuela(cliente) {
@@ -1380,7 +1328,7 @@ function mostrarModalConfirmacionVenezuela() {
             _vzClienteSeleccionado = null;
             _vzBeneficiarioSeleccionadoId = null;
             document.getElementById('vz-beneficiarios-existentes').innerHTML = '';
-            cargarHistorialTransferenciasVenezuela();
+            cargarTransferencias();
           } catch (err) {
             UI.toast(err.message, 'error');
           }
@@ -1392,20 +1340,69 @@ function mostrarModalConfirmacionVenezuela() {
   document.body.appendChild(overlay);
 }
 
+// Trae las transferencias "genericas" (Colombia y otros destinos simples) y las
+// transferencias a Venezuela (que viven en su propia tabla, por los datos de
+// cliente/beneficiario) y las normaliza a una forma comun para mostrarlas
+// TODAS juntas en un unico historial, sin importar el destino elegido.
+function normalizarTransferenciaGenerica(t) {
+  return {
+    origen: 'generico',
+    id: t.id,
+    fecha: t.fecha,
+    destino: t.destino,
+    tipo: t.tipo,
+    moneda: t.moneda_codigo || '',
+    valor: Number(t.valor || 0),
+    detalle: t.referencia || '',
+    notas: t.notas || '',
+    creado_en: t.creado_en,
+    raw: t,
+  };
+}
+
+function normalizarTransferenciaVenezuela(f) {
+  const cliente = f.clientes_venezuela ? `${f.clientes_venezuela.nombre} (${f.clientes_venezuela.documento})` : '-';
+  const benef = f.beneficiarios_venezuela ? `${f.beneficiarios_venezuela.nombre} (${f.beneficiarios_venezuela.tipo_documento} ${f.beneficiarios_venezuela.documento})` : '-';
+  return {
+    origen: 'venezuela',
+    id: f.id,
+    fecha: f.fecha,
+    destino: 'Venezuela',
+    tipo: 'Envío',
+    moneda: 'ARS',
+    valor: Number(f.valor_ars || 0),
+    detalle: `Tasa ${UI.formatoNumero(f.tasa)} → ${UI.formatoNumero(f.total_bs)} Bs`,
+    notas: `${cliente} → ${benef}`,
+    creado_en: f.creado_en,
+    raw: f,
+  };
+}
+
 async function cargarTransferencias() {
   const desde = document.getElementById('f-desde').value;
   const hasta = document.getElementById('f-hasta').value;
   const tablaWrap = document.getElementById('tr-tabla-wrap');
   tablaWrap.innerHTML = '<div class="empty-state">Cargando...</div>';
 
-  let filtradas;
+  let genericas, venezuela;
   try {
-    filtradas = await Api.get('/transferencias', { desde, hasta });
+    [genericas, venezuela] = await Promise.all([
+      Api.get('/transferencias', { desde, hasta }),
+      Api.listarTransferenciasVenezuela({ desde, hasta }),
+    ]);
   } catch (err) {
     console.error('Error cargando transferencias:', err);
     tablaWrap.innerHTML = `<div class="empty-state">Error: ${err.message}</div>`;
     return;
   }
+
+  const filtradas = [
+    ...genericas.map(normalizarTransferenciaGenerica),
+    ...venezuela.map(normalizarTransferenciaVenezuela),
+  ].sort((a, b) => {
+    if (a.fecha !== b.fecha) return a.fecha < b.fecha ? 1 : -1;
+    return (b.creado_en || '').localeCompare(a.creado_en || '');
+  });
 
   if (filtradas.length === 0) {
     tablaWrap.innerHTML = '<div class="empty-state">No hay movimientos en este periodo.</div>';
@@ -1413,30 +1410,55 @@ async function cargarTransferencias() {
   }
 
   const table = UI.el('table', {}, [
-    UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Destino', 'Tipo', 'Moneda', 'Valor', 'Referencia', 'Notas', ''].map((h) => UI.el('th', {}, h)))),
+    UI.el('thead', {}, UI.el('tr', {}, ['Fecha', 'Destino', 'Tipo', 'Moneda', 'Valor', 'Detalle', 'Notas', ''].map((h) => UI.el('th', {}, h)))),
   ]);
   const tbody = UI.el('tbody');
   filtradas.forEach((t) => {
-    tbody.appendChild(UI.el('tr', {}, [
-      UI.el('td', {}, t.fecha),
-      UI.el('td', {}, t.destino),
-      UI.el('td', {}, t.tipo),
-      UI.el('td', {}, t.moneda_codigo),
-      UI.el('td', {}, UI.formatoNumero(t.valor)),
-      UI.el('td', {}, t.referencia || ''),
-      UI.el('td', {}, t.notas || ''),
-      UI.el('td', { class: 'table-actions' }, esAdmin() ? UI.el('button', {
+    const acciones = [];
+    if (t.origen === 'venezuela') {
+      const f = t.raw;
+      acciones.push(UI.el('button', {
+        class: 'btn-secondary',
+        onclick: () => generarReciboVenezuela({
+          fecha: f.fecha, numeroRecibo: f.id,
+          clienteNombre: f.clientes_venezuela ? f.clientes_venezuela.nombre : '',
+          clienteDocumento: f.clientes_venezuela ? f.clientes_venezuela.documento : '',
+          clienteDireccion: f.clientes_venezuela ? f.clientes_venezuela.direccion : '',
+          clienteTelefono: f.clientes_venezuela ? f.clientes_venezuela.telefono : '',
+          benefNombre: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.nombre : '',
+          benefDocumento: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.documento : '',
+          benefDireccion: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.direccion : '',
+          benefBanco: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.banco : '',
+          benefCuenta: f.beneficiarios_venezuela ? f.beneficiarios_venezuela.cuenta : '',
+          valorArs: f.valor_ars, tasa: f.tasa, totalBs: f.total_bs,
+        }),
+      }, '🖨️'));
+    }
+    if (esAdmin()) {
+      acciones.push(UI.el('button', {
         onclick: async () => {
           if (!confirm('¿Eliminar este movimiento?')) return;
           try {
-            await Api.delete(`/transferencias/${t.id}`);
+            const ruta = t.origen === 'venezuela' ? `/transferencias-venezuela/${t.id}` : `/transferencias/${t.id}`;
+            await Api.delete(ruta);
             UI.toast('Eliminado.');
             cargarTransferencias();
           } catch (err) {
             UI.toast(err.message, 'error');
           }
         },
-      }, '🗑️') : ''),
+      }, '🗑️'));
+    }
+
+    tbody.appendChild(UI.el('tr', {}, [
+      UI.el('td', {}, t.fecha),
+      UI.el('td', {}, t.destino),
+      UI.el('td', {}, t.tipo),
+      UI.el('td', {}, t.moneda),
+      UI.el('td', {}, UI.formatoNumero(t.valor)),
+      UI.el('td', {}, t.detalle),
+      UI.el('td', {}, t.notas),
+      UI.el('td', { class: 'table-actions', style: 'display:flex; gap:6px;' }, acciones),
     ]));
   });
   table.appendChild(tbody);
